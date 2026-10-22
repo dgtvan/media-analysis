@@ -1,0 +1,36 @@
+[project]
+name = "media-analysis"
+version = "0.1.0"
+description = "Turn a folder of video/audio recordings into a template-based Markdown report with evidence frames."
+authors = [
+    { name = "Van Dang", email = "dgtvan@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.2.172",
+    "faster-whisper>=1.2.1",
+    "numpy>=2.5.4",
+    "opencv-python-headless>=5.0.0.93",
+    "pillow>=13.0.0",
+    "pydantic>=2.14.1",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+media-analysis = "media_analysis:main"
+
+[project.optional-dependencies]
+api = [
+    "anthropic>=2.1.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.4,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

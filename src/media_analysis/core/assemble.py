@@ -1,0 +1,103 @@
+"""Write the deliverable: report.md plus only the frames and extracted text the report actually references."""
+
+from __future__ import annotations
+
+import re
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+from media_analysis.core.models import Classification, Evidence, EvidenceItem, Ingest, ReportDraft, format_timecode
+from media_analysis.templates.registry import Template
+
+_EVIDENCE_IMAGE = re.compile(r"!\[([^\]]*)\]\(evidence:([A-Za-z0-9_-]+)\)")
+_EVIDENCE_ANY = re.compile(r"\(evidence:([A-Za-z0-9_-]+)\)")
+
+
+def _safe_stem(name: str) -> str:
+    stem = Path(name).stem
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-")[:60] or "media"
+
+
+def assemble_output(
+    output_dir: Path,
+    draft: ReportDraft,
+    evidence: Evidence,
+    ingest: Ingest,
+    template: Template,
+    classification: Classification,
+) -> tuple[Path, list[str]]:
+    warnings: list[str] = []
+    reference = output_dir / "reference"
+    # reference/ is owned by the app; rebuilding it drops frames a previous run referenced but this one doesn't.
+    shutil.rmtree(reference, ignore_errors=True)
+    frames_dir, text_dir = reference / "frames", reference / "text"
+    by_id = {e.id: e for e in evidence.items}
+    written: dict[str, tuple[str, str | None]] = {}
+
+    def materialise(item: EvidenceItem) -> tuple[str, str | None]:
+        if item.id in written:
+            return written[item.id]
+        f = ingest.by_id(item.file_id)
+        base = f"{_safe_stem(f.name)}_{format_timecode(item.time, '-')}"
+        name, n = base, 2
+        while (frames_dir / f"{name}.jpg").exists():
+            name, n = f"{base}_{n}", n + 1
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(item.path, frames_dir / f"{name}.jpg")
+        text_rel = None
+        if item.text:
+            text_dir.mkdir(parents=True, exist_ok=True)
+            (text_dir / f"{name}.md").write_text(
+                f"# Text in frame — {f.name} at {format_timecode(item.time)}\n\n```text\n{item.text}\n```\n",
+                encoding="utf-8",
+            )
+            text_rel = f"reference/text/{name}.md"
+        written[item.id] = (f"reference/frames/{name}.jpg", text_rel)
+        return written[item.id]
+
+    def replace_image(m: re.Match) -> str:
+        caption, eid = m.group(1).strip(), m.group(2)
+        item = by_id.get(eid)
+        if item is None:
+            warnings.append(f"report referenced unknown evidence id {eid}; removed")
+            return ""
+        img, text_rel = materialise(item)
+        f = ingest.by_id(item.file_id)
+        line = f"*{caption or item.caption} — {f.name} at {format_timecode(item.time)}*"
+        if text_rel:
+            line += f" · [text in frame]({text_rel})"
+        return f"![{caption or item.caption}]({img})\n\n{line}"
+
+    def replace_link(m: re.Match) -> str:
+        item = by_id.get(m.group(1))
+        if item is None:
+            warnings.append(f"report linked unknown evidence id {m.group(1)}; link removed")
+            return "()"
+        return f"({materialise(item)[0]})"
+
+    body = _EVIDENCE_IMAGE.sub(replace_image, draft.markdown)
+    body = _EVIDENCE_ANY.sub(replace_link, body)
+
+    lines = body.splitlines()
+    if lines and lines[0].startswith("# "):
+        title, rest = lines[0], lines[1:]
+    else:
+        title, rest = f"# {draft.title}", lines
+    while rest and not rest[0].strip():
+        rest = rest[1:]
+    sources = ", ".join(f"{f.name} ({format_timecode(f.duration)})" for f in ingest.files)
+    chosen = f"{template.name} (`{template.id}`)" + (" — selected by user" if classification.forced else "")
+    meta = [
+        "",
+        f"> **Processing type:** {chosen}  ",
+        f"> **Sources:** {sources}  ",
+        f"> **Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        "",
+    ]
+    report_path = output_dir / "report.md"
+    report_path.write_text("\n".join([title, *meta, *rest]).rstrip() + "\n", encoding="utf-8")
+    unused = len(evidence.items) - len(written)
+    if unused > 0:
+        warnings.append(f"{unused} evidence frame(s) were not used by the report and were left out")
+    return report_path, warnings
