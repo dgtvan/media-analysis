@@ -226,7 +226,7 @@ tray/MediaAnalysis.Tray/
   ProjectCatalog.cs    reads the projects folder into Project records and their state
   AutoAnalysis.cs      which new projects start on their own
   RunHistory.cs        last result per project (history.json)
-  MediaDurations.cs    recording length per project, measured with ffprobe in the background
+  MediaDurations.cs    recording length per project, measured with ffprobe in the background, cached per file
   ReportOpener.cs      opens a report in VS Code with the chosen Claude profile
   AppSettings.cs       settings.json: folders, names, ignored projects, core options, Claude profile
   AppPaths.cs, AppInitializer.cs   data folder layout, startup initialization and migration from older installs
@@ -252,8 +252,11 @@ tray/MediaAnalysis.Tray/
   stopped changing for two minutes, and never retries a failed or stopped run.
 - **Busy and closing.** The app is busy while an analysis runs or is queued. An install asks it to close through a
   named event; it refuses while busy and keeps working.
+- **Resuming.** The running project (with the time spent) and the queue are saved in `pending.json`; when the app
+  starts again it continues them, unless the user stopped them. The Elapsed column is the project's total processing
+  time across continued runs.
 - **Data folder.** Everything the app writes is under the folder given with `--data-dir` (settings, templates, logs,
-  history, run statistics). The core gets the same folder through `MEDIA_ANALYSIS_HOME`.
+  history, `pending.json`, `durations.json` with measured lengths, run statistics). The core gets the same folder through `MEDIA_ANALYSIS_HOME`.
 
 ## 5. Testing
 

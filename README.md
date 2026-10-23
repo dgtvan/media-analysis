@@ -55,7 +55,8 @@ subfolder is a project (one recording session). Each project's report goes to `<
   the project's analysis, live while running: time spent in stopped, failed or interrupted runs is added when the
   analysis continues, and starts again from zero for *Analyse again* after a finished analysis or *Analyse from
   scratch*), when it was last analysed, the recording length (total of the videos, or of the audio when there is no
-  video; Meeting Recorder's microphone and system audio count once), and the number of media files. Right-click a project for its
+  video; Meeting Recorder's microphone and system audio count once), and the number of media files. Lengths are kept in
+  `durations.json` in the data folder, so a file is only measured again when it changes. Right-click a project for its
   actions (*Analyse* / *Analyse again*, *Analyse from scratch...* (clears everything kept from earlier runs and redoes
   every step), *Stop analysis* or *Remove from queue*, *Ignore* / *Unignore*), then what to
   open (*View logs*, *Open report*, *Open project folder*, *Open output folder*) and, after a general report, *Add the

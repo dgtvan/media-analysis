@@ -71,7 +71,7 @@ sealed class TrayApp : ApplicationContext, IAppHost
                 ShowWindow();
         };
 
-        _durations = new MediaDurations(FindFfprobe);
+        _durations = new MediaDurations(FindFfprobe, Path.Combine(AppPaths.Data, "durations.json"));
         _durations.Changed += () => _ui.Post(_ => Changed?.Invoke(), null);
         _runner.Changed += Refresh;
         _runner.Finished += OnAnalysisFinished;

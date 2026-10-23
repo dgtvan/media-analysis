@@ -230,4 +230,32 @@ public sealed class GuiModelTests : IDisposable
             ProjectState.NotAnalysed, CreatedUtc: now.AddHours(-3), NewestMediaUtc: now.AddHours(-3));
         Assert.True(AutoAnalysis.ShouldStart(project, settings, null, now));
     }
+
+    [Fact]
+    public void Measured_lengths_survive_a_restart_until_the_file_changes()
+    {
+        string video = Path.Combine(_dir, "video.mp4");
+        File.WriteAllText(video, "x");
+        string cache = Path.Combine(_dir, "durations.json");
+        int probes = 0;
+        TimeSpan? Probe(string _) { probes++; return TimeSpan.FromMinutes(5); }
+        Project Make(long size) => new("p", _dir, default, 1, "", null, ProjectState.NotAnalysed,
+            MediaFiles: [new MediaFile(video, size, new DateTime(2026, 10, 23, 1, 0, 0, DateTimeKind.Utc), true)]);
+        string Measure(MediaDurations d, Project p)
+        {
+            SpinWait.SpinUntil(() => d.Describe(p) != "measuring...", 5000);
+            Thread.Sleep(100); // the cache is written after the last file
+            return d.Describe(p);
+        }
+
+        using (var first = new MediaDurations(Probe, cache))
+            Assert.Equal("5:00", Measure(first, Make(100)));
+        using (var second = new MediaDurations(Probe, cache))
+        {
+            Assert.Equal("5:00", second.Describe(Make(100)));
+            Assert.Equal(1, probes);
+            Assert.Equal("5:00", Measure(second, Make(200)));
+            Assert.Equal(2, probes);
+        }
+    }
 }
