@@ -1,6 +1,6 @@
 # media-analysis
 
-Design: docs/PLAN.md. Deployment: docs/DEPLOYMENT.md.
+Architecture: docs/ARCHITECTURE.md. Deployment: docs/DEPLOYMENT.md.
 
 ## Deployment
 
