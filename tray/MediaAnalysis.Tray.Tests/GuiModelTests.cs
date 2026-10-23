@@ -182,4 +182,52 @@ public sealed class GuiModelTests : IDisposable
         for (int i = 0; i < 4; i++)
             Assert.InRange(frames[3][i] - frames[0][i + 1], -0.05f, 0.05f);
     }
+
+    [Fact]
+    public void Elapsed_time_adds_up_across_continued_runs_and_resets_for_a_new_analysis()
+    {
+        var start = new DateTime(2026, 10, 23, 9, 0, 0);
+        RunResult Result(RunOutcome outcome, int minutes, TimeSpan? total = null) =>
+            new(outcome, "", "log", start, start.AddMinutes(minutes), Total: total);
+
+        var stopped = Result(RunOutcome.Cancelled, 10, TimeSpan.FromMinutes(25));
+        Assert.Equal(TimeSpan.FromMinutes(25), AnalysisRunner.CarriedTime(stopped, fresh: false));
+        Assert.Equal(TimeSpan.FromMinutes(10), AnalysisRunner.CarriedTime(Result(RunOutcome.Failed, 10), fresh: false));
+        Assert.Equal(TimeSpan.Zero, AnalysisRunner.CarriedTime(stopped, fresh: true));
+        Assert.Equal(TimeSpan.Zero, AnalysisRunner.CarriedTime(Result(RunOutcome.Succeeded, 30, TimeSpan.FromMinutes(40)), fresh: false));
+        Assert.Equal(TimeSpan.Zero, AnalysisRunner.CarriedTime(null, fresh: false));
+
+        // Results saved before the total was recorded still load and count their own run.
+        var old = System.Text.Json.JsonSerializer.Deserialize<RunResult>(
+            "{\"Outcome\":2,\"Message\":\"\",\"LogPath\":\"l\",\"StartedAt\":\"2026-10-23T09:00:00\",\"FinishedAt\":\"2026-10-23T09:07:00\"}")!;
+        Assert.Equal(TimeSpan.FromMinutes(7), old.TotalElapsed);
+    }
+
+    [Fact]
+    public void Interrupted_work_resumes_first_with_its_time_and_not_from_scratch()
+    {
+        string file = Path.Combine(_dir, "pending.json");
+        var saved = new AnalysisRunner.PendingWork(
+            new AnalysisRunner.PendingRun("a", Fresh: true, Spent: TimeSpan.FromMinutes(12)),
+            [new AnalysisRunner.PendingRun("b", Fresh: true), new AnalysisRunner.PendingRun("c", Fresh: false)]);
+        File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(saved));
+
+        var order = AnalysisRunner.ResumeOrder(AnalysisRunner.LoadPending(file)!);
+
+        Assert.Equal(["a", "b", "c"], order.Select(r => r.Path));
+        Assert.False(order[0].Fresh);
+        Assert.Equal(TimeSpan.FromMinutes(12), order[0].Spent);
+        Assert.True(order[1].Fresh);
+        Assert.Null(AnalysisRunner.LoadPending(Path.Combine(_dir, "missing.json")));
+    }
+
+    [Fact]
+    public void A_project_added_while_the_app_was_closed_is_analysed_automatically_on_start()
+    {
+        var now = DateTime.UtcNow;
+        var settings = new AppSettings { AutoAnalyse = true, AutoAnalyseSinceUtc = now.AddDays(-1) };
+        var project = new Project("new", Path.Combine(_dir, "new"), now.AddHours(-3), 1, Path.Combine(_dir, "out", "new"), null,
+            ProjectState.NotAnalysed, CreatedUtc: now.AddHours(-3), NewestMediaUtc: now.AddHours(-3));
+        Assert.True(AutoAnalysis.ShouldStart(project, settings, null, now));
+    }
 }

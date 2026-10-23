@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace MediaAnalysis.Tray;
 
 /// <summary>The analysis in progress.</summary>
-sealed class ActiveRun(string projectPath, string name, string logPath)
+/// <param name="before">Processing time of the stopped or failed runs this one continues.</param>
+sealed class ActiveRun(string projectPath, string name, string logPath, TimeSpan before = default)
 {
     public string ProjectPath { get; } = projectPath;
     public string Name { get; } = name;
@@ -15,11 +17,17 @@ sealed class ActiveRun(string projectPath, string name, string logPath)
     public string? FinalMessage { get; set; }
     public bool GenericReport { get; set; }
     public bool Cancelled { get; set; }
+    public bool Fresh { get; init; }
 
     /// <summary>E.g. "Transcribing audio… 45%".</summary>
     public string Status => RunStatus.Describe(Stage, Percent, Activity);
 
     public TimeSpan Elapsed => DateTime.Now - StartedAt;
+
+    public TimeSpan Before { get; } = before;
+
+    /// <summary>Processing time of the project's analysis so far, including the runs this one continues.</summary>
+    public TimeSpan TotalElapsed => Before + Elapsed;
 }
 
 /// <summary>
@@ -34,8 +42,19 @@ sealed class AnalysisRunner : IDisposable
     private readonly Func<IEnumerable<string>> _options;
     private readonly RunHistory _history;
     private readonly Func<string, string> _displayName;
-    private readonly List<(string Path, string Name, string Output, bool Fresh)> _queue = [];
+    private readonly List<QueueItem> _queue = [];
+    private readonly string? _pendingPath;
     private Process? _process;
+    private DateTime _pendingSaved;
+
+    /// <param name="Carry">Time already spent, for an interrupted analysis that is resumed; null = from the history.</param>
+    private sealed record QueueItem(string Path, string Name, string Output, bool Fresh, TimeSpan? Carry = null);
+
+    /// <summary>What was running or queued, saved so an analysis cut short by an install, a crash or sign-out resumes.</summary>
+    internal sealed record PendingWork(PendingRun? Running, List<PendingRun> Queue);
+
+    /// <param name="Spent">Processing time of the running analysis so far (null for queued projects).</param>
+    internal sealed record PendingRun(string Path, bool Fresh, TimeSpan? Spent = null);
 
     /// <summary>Something changed: queue, progress or a result.</summary>
     public event Action? Changed;
@@ -46,9 +65,11 @@ sealed class AnalysisRunner : IDisposable
     /// <param name="core">How to start the core; null when it isn't available.</param>
     /// <param name="options">Core options from the settings, read when each analysis starts.</param>
     /// <param name="displayName">The user's name for a project folder, recorded in the run statistics.</param>
+    /// <param name="pendingPath">Where the running and queued projects are saved (see <see cref="ResumePending"/>); null = not saved.</param>
     public AnalysisRunner(SynchronizationContext ui, Func<CoreConfig?> core, Func<IEnumerable<string>> options, RunHistory history,
-        Func<string, string>? displayName = null)
+        Func<string, string>? displayName = null, string? pendingPath = null)
     {
+        _pendingPath = pendingPath;
         _ui = ui;
         _core = core;
         _options = options;
@@ -78,16 +99,85 @@ sealed class AnalysisRunner : IDisposable
     {
         if (IsRunning(project.Path) || IsQueued(project.Path) || project.OutputPath.Length == 0)
             return;
-        _queue.Add((project.Path, project.Name, project.OutputPath, fresh));
+        _queue.Add(new QueueItem(project.Path, project.Name, project.OutputPath, fresh));
         StartNext();
+        SavePending();
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Queues again what was running or queued when the app last stopped without the user stopping it (an install,
+    /// a crash, signing out). The interrupted analysis goes first and continues from the core's cache, keeping the time
+    /// already spent. <paramref name="find"/> returns the project, or null when it can't be analysed any more.
+    /// Returns the names of the projects queued again.
+    /// </summary>
+    public List<string> ResumePending(Func<string, Project?> find)
+    {
+        var resumed = new List<string>();
+        if (LoadPending(_pendingPath) is not { } pending)
+            return resumed;
+        foreach (var item in ResumeOrder(pending))
+        {
+            if (find(item.Path) is not { } project || project.OutputPath.Length == 0 || IsRunning(project.Path) || IsQueued(project.Path))
+                continue;
+            _queue.Add(new QueueItem(project.Path, project.Name, project.OutputPath, item.Fresh, item.Spent));
+            resumed.Add(project.Path);
+        }
+        StartNext();
+        SavePending();
+        Changed?.Invoke();
+        return resumed;
+    }
+
+    /// <summary>The interrupted analysis first, then the queue in its order.</summary>
+    internal static List<PendingRun> ResumeOrder(PendingWork pending) =>
+        // A run from scratch already cleared its cache, so continuing it isn't from scratch any more.
+        [.. pending.Running is { } r ? [r with { Fresh = false }] : Array.Empty<PendingRun>(), .. pending.Queue ?? []];
+
+    internal static PendingWork? LoadPending(string? path)
+    {
+        try
+        {
+            return path != null && File.Exists(path) ? JsonSerializer.Deserialize<PendingWork>(File.ReadAllText(path)) : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Saves the running and queued projects; a failed save only means nothing is resumed.</summary>
+    private void SavePending()
+    {
+        if (_pendingPath == null)
+            return;
+        _pendingSaved = DateTime.Now;
+        var pending = new PendingWork(
+            Current is { } run ? new PendingRun(run.ProjectPath, run.Fresh, run.TotalElapsed) : null,
+            _queue.Select(q => new PendingRun(q.Path, q.Fresh, q.Carry)).ToList());
+        try
+        {
+            if (pending.Running == null && pending.Queue.Count == 0)
+            {
+                File.Delete(_pendingPath);
+                return;
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(_pendingPath)!);
+            File.WriteAllText(_pendingPath, JsonSerializer.Serialize(pending));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <summary>Stops a running analysis (the core resumes from its cache next time) or removes it from the queue.</summary>
     public void Cancel(string projectPath)
     {
         if (_queue.RemoveAll(q => SamePath(q.Path, projectPath)) > 0)
+        {
+            SavePending();
             Changed?.Invoke();
+        }
         if (Current != null && IsRunning(projectPath))
         {
             Current.Cancelled = true;
@@ -111,12 +201,13 @@ sealed class AnalysisRunner : IDisposable
     {
         if (Current != null || _queue.Count == 0)
             return;
-        var (path, name, output, fresh) = _queue[0];
+        var (path, name, output, fresh, carry) = _queue[0];
         _queue.RemoveAt(0);
 
         string logPath = Path.Combine(AppPaths.Logs, $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss}_{Sanitize(name)}.log");
-        var run = new ActiveRun(path, name, logPath);
+        var run = new ActiveRun(path, name, logPath, carry ?? CarriedTime(_history.Get(path), fresh)) { Fresh = fresh };
         Current = run;
+        SavePending();
 
         StreamWriter? log = null;
         try
@@ -129,6 +220,9 @@ sealed class AnalysisRunner : IDisposable
             log.WriteLine($"# Project:  {path}");
             log.WriteLine($"# Output:   {output}");
             log.WriteLine($"# Started:  {run.StartedAt:yyyy-MM-dd HH:mm:ss}");
+            if (run.Before > TimeSpan.Zero)
+                log.WriteLine($"# Continues an unfinished analysis: {RunStatus.FormatElapsed(run.Before)} spent before"
+                    + (carry != null ? " (resumed after the app was closed)" : ""));
             log.WriteLine($"# Build:    {BuildInfo.Built}");
             log.WriteLine($"# Options:  {(options.Count > 0 ? string.Join(' ', options) : "(defaults)")}");
             log.WriteLine($"# Claude:   {ClaudeProfile(options)}");
@@ -208,6 +302,9 @@ sealed class AnalysisRunner : IDisposable
                         run.Percent = e.Percent ?? run.Percent;
                     else
                         (run.Percent, run.Activity) = (null, e.Message);
+                    // Keeps the time spent fresh in case the app is killed (an install with -Force, sign-out).
+                    if (DateTime.Now - _pendingSaved > TimeSpan.FromSeconds(15))
+                        SavePending();
                     Changed?.Invoke();
                 }, null);
                 return;
@@ -225,7 +322,9 @@ sealed class AnalysisRunner : IDisposable
         lock (log)
         {
             log.WriteLine($"# Finished: {DateTime.Now:yyyy-MM-dd HH:mm:ss}, {outcome.ToString().ToLowerInvariant()}, " +
-                $"elapsed {RunStatus.FormatElapsed(run.Elapsed)} (exit code {exitCode})");
+                $"elapsed {RunStatus.FormatElapsed(run.Elapsed)}"
+                + (run.Before > TimeSpan.Zero ? $", {RunStatus.FormatElapsed(run.TotalElapsed)} in total" : "")
+                + $" (exit code {exitCode})");
             log.Dispose();
         }
         Complete(run, outcome, message);
@@ -233,9 +332,12 @@ sealed class AnalysisRunner : IDisposable
 
     private void Complete(ActiveRun run, RunOutcome outcome, string message)
     {
-        var result = new RunResult(outcome, message, run.LogPath, run.StartedAt, DateTime.Now, run.GenericReport);
+        var finished = DateTime.Now;
+        var result = new RunResult(outcome, message, run.LogPath, run.StartedAt, finished, run.GenericReport,
+            run.Before + (finished - run.StartedAt));
         Current = null;
         _history.Set(run.ProjectPath, result);
+        SavePending();
         Finished?.Invoke(run.ProjectPath, result);
         StartNext();
         Changed?.Invoke();
@@ -253,8 +355,10 @@ sealed class AnalysisRunner : IDisposable
         }
     }
 
+    /// <summary>Stops for good when the app exits; what was running or queued is saved first and resumes next time.</summary>
     public void Dispose()
     {
+        SavePending();
         _queue.Clear();
         Kill();
         _process?.Dispose();
@@ -266,6 +370,13 @@ sealed class AnalysisRunner : IDisposable
         int i = options.ToList().IndexOf("--claude-profile");
         return i >= 0 && i + 1 < options.Count ? options[i + 1] : "(not set)";
     }
+
+    /// <summary>
+    /// Time to carry into a new run: the previous total when that run was stopped or failed (this one continues it),
+    /// nothing after a finished analysis or for a run from scratch (a new analysis).
+    /// </summary>
+    internal static TimeSpan CarriedTime(RunResult? previous, bool fresh) =>
+        !fresh && previous is { Unfinished: true } ? previous.TotalElapsed : TimeSpan.Zero;
 
     private static bool SamePath(string a, string b) =>
         string.Equals(a.TrimEnd('\\'), b.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);

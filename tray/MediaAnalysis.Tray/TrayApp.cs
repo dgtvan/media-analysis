@@ -47,7 +47,7 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _settings = AppSettings.Load(out string? settingsLoadError);
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _runner = new AnalysisRunner(_ui, LoadCore, _settings.CoreArguments,
-            new RunHistory(AppPaths.History), _settings.DisplayName);
+            new RunHistory(AppPaths.History), _settings.DisplayName, Path.Combine(AppPaths.Data, "pending.json"));
 
         _menu = new ContextMenuStrip();
         _menu.Items.Add(new ToolStripMenuItem("Status", null, (_, _) => ShowWindow()) { Font = new Font(_menu.Font, FontStyle.Bold) });
@@ -89,6 +89,8 @@ sealed class TrayApp : ApplicationContext, IAppHost
             AddProblem(problem);
         LoadCore();
         WatchProjects();
+        ResumePending();
+        // Also queues new projects that arrived while the app wasn't running, when automatic analysis is on.
         Rescan();
         _rescanTimer.Start();
         if (_settings.ProjectsRoot == null || _settings.OutputRoot == null)
@@ -275,10 +277,22 @@ sealed class TrayApp : ApplicationContext, IAppHost
         ShowBalloon("Media Analysis", "An install was refused because an analysis is running. Run it again once the analysis has finished.", ToolTipIcon.Info);
     }
 
+    /// <summary>Continues what was running or queued when the app last closed without the user stopping it.</summary>
+    private void ResumePending()
+    {
+        var resumed = _runner.ResumePending(path =>
+            _settings.OutputRoot != null && Directory.Exists(path) && !_settings.IsIgnored(path)
+                ? ProjectCatalog.Read(new DirectoryInfo(path), _settings.OutputRoot)
+                : null);
+        if (resumed.Count > 0)
+            ShowBalloon("Media Analysis", $"Continuing where it stopped: {_settings.DisplayName(resumed[0])}"
+                + (resumed.Count > 1 ? $" (+{resumed.Count - 1} queued)" : ""), ToolTipIcon.Info);
+    }
+
     private void Exit()
     {
         if (_runner.IsBusy && MessageBox.Show(
-                "An analysis is running. Stop it and exit?\n\nAnalysing the project again later continues where it stopped.",
+                "An analysis is running. Exit anyway?\n\nIt stops now and continues where it stopped when Media Analysis starts again.",
                 "Media Analysis", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
             return;
         ExitNow();

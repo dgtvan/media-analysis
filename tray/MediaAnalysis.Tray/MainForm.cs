@@ -344,11 +344,11 @@ sealed class MainForm : Form
         RunResult? last = runner.LastResult(p.Path);
         string lastAnalysed = p.ReportWrittenUtc is { } written ? written.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "";
         string files = p.MediaFileCount > 0 ? p.MediaFileCount.ToString() : "";
-        string lastElapsed = last != null ? RunStatus.FormatElapsed(last.Elapsed) : "";
+        string lastElapsed = last != null ? RunStatus.FormatElapsed(last.TotalElapsed) : "";
         string name = _host.Settings.DisplayName(p.Path);
 
         if (runner.Current is { } run && runner.IsRunning(p.Path))
-            return new Row(p.Path, name, p.Name, run.Status, RunStatus.FormatElapsed(run.Elapsed), lastAnalysed, files, Color.FromArgb(0, 90, 200));
+            return new Row(p.Path, name, p.Name, run.Status, RunStatus.FormatElapsed(run.TotalElapsed), lastAnalysed, files, Color.FromArgb(0, 90, 200));
         if (runner.QueuePosition(p.Path) is > 0 and var position)
             return new Row(p.Path, name, p.Name, position == 1 ? "Queued (next)" : $"Queued ({position})", "", lastAnalysed, files, SystemColors.GrayText);
         if (_host.Settings.IsIgnored(p.Path))

@@ -11,13 +11,24 @@ sealed record RunResult(
     string LogPath,
     DateTime StartedAt,
     DateTime FinishedAt,
-    bool GenericReport = false)
+    bool GenericReport = false,
+    TimeSpan? Total = null)
 {
+    /// <summary>This run alone.</summary>
     public TimeSpan Elapsed => FinishedAt - StartedAt;
+
+    /// <summary>
+    /// Processing time of the project's current analysis: this run plus the stopped or failed runs it continued.
+    /// Results saved before this was recorded count only their own run.
+    /// </summary>
+    public TimeSpan TotalElapsed => Total ?? Elapsed;
+
+    /// <summary>A later run continues this one (and adds to its time) instead of starting over.</summary>
+    public bool Unfinished => Outcome is RunOutcome.Failed or RunOutcome.Cancelled;
 }
 
 /// <summary>
-/// The last result per project, kept in %LOCALAPPDATA%\MediaAnalysis\data\history.json so a failure or the time an
+/// The last result per project, kept in history.json in the data folder so a failure or the time an
 /// analysis took is still shown after the app restarts.
 /// </summary>
 sealed class RunHistory

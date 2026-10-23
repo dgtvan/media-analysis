@@ -51,8 +51,10 @@ subfolder is a project (one recording session). Each project's report goes to `<
 - **Projects tab**: every project with its name (yours to change: F2, typing, or right-click → *Rename*; the folder
   itself is never renamed and reports stay in `<output folder>\<folder name>`; clear the name to go back to the folder
   name), its folder, a plain-language status (*Transcribing audio… 45%*, *Writing the report…*,
-  *Done*, *Failed: …*, *Stopped by you*, *Not analysed*, *Ignored*), the elapsed time (live while running; the last
-  run's time otherwise), when it was last analysed, the recording length (total of the videos, or of the audio when there is no
+  *Done*, *Failed: …*, *Stopped by you*, *Not analysed*, *Ignored*), the elapsed time (the total processing time of
+  the project's analysis, live while running: time spent in stopped, failed or interrupted runs is added when the
+  analysis continues, and starts again from zero for *Analyse again* after a finished analysis or *Analyse from
+  scratch*), when it was last analysed, the recording length (total of the videos, or of the audio when there is no
   video; Meeting Recorder's microphone and system audio count once), and the number of media files. Right-click a project for its
   actions (*Analyse* / *Analyse again*, *Analyse from scratch...* (clears everything kept from earlier runs and redoes
   every step), *Stop analysis* or *Remove from queue*, *Ignore* / *Unignore*), then what to
@@ -82,7 +84,10 @@ subfolder is a project (one recording session). Each project's report goes to `<
 - **Needs attention**: a failed analysis or a broken install turns the icon into a warning and shows a banner in the
   window until you dismiss it.
 
-The app starts at sign-in. It counts as **busy** while an analysis runs or is queued: an install then leaves it
+The app starts at sign-in. If it was closed while analysing (an install, signing out, a crash, or *Exit*), it
+continues that analysis when it starts again, followed by the projects that were queued; only *Stop analysis* (or
+*Remove from queue*) drops a project. With automatic analysis on, projects added while the app was closed are picked
+up as well. It counts as **busy** while an analysis runs or is queued: an install then leaves it
 running and asks to be run again later. Results (outcome,
 elapsed time, log) are kept in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\history.json`, so they survive restarts.
 
