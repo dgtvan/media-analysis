@@ -12,24 +12,43 @@ document or whiteboard, sometimes a still camera shot; "moving" = people on came
 high for text and diagrams), and, when there is video, one contact sheet image with thumbnails.
 
 Pick the single template whose description and signals best match the overall purpose of the recording set.
-If none of them fits reasonably well, answer "none" rather than forcing a poor match.
+If none of them fits reasonably well, answer "none" rather than forcing a poor match; a generic report is written
+instead, and your answer helps the user create a new template or widen an existing one.
 Write `reason` in English, 1-3 sentences, citing concrete evidence from the transcript or visuals.
 `closest` lists up to 3 template ids from best to worst match (excluding the chosen one).
-When the answer is "none", `suggested_template` proposes a new template: a short id, a name, and one sentence
-describing it. Otherwise leave it empty."""
+When the answer is "none":
+- `mismatch`: 2-5 short key points on why the closest templates don't fit (what this recording has that they don't
+  expect, or what they expect that is missing), so the user can decide between a new template and widening one.
+- `suggested_template`: a new template for this kind of recording: a short lowercase id with dashes, a name, a
+  one-sentence description, signals (what in transcript/visuals identifies this type), evidence (visual moments worth
+  capturing) and report sections.
+Otherwise leave `mismatch` empty and omit `suggested_template`."""
 
 
 def classify_schema(template_ids: list[str]) -> dict:
+    strings = {"type": "array", "items": {"type": "string"}}
     return {
         "type": "object",
         "properties": {
             "template_id": {"type": "string", "enum": [*template_ids, "none"]},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "reason": {"type": "string"},
-            "closest": {"type": "array", "items": {"type": "string"}},
-            "suggested_template": {"type": "string"},
+            "closest": strings,
+            "mismatch": strings,
+            "suggested_template": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "signals": strings,
+                    "evidence": strings,
+                    "sections": strings,
+                },
+                "required": ["id", "name", "description", "signals", "evidence", "sections"],
+            },
         },
-        "required": ["template_id", "confidence", "reason", "closest"],
+        "required": ["template_id", "confidence", "reason", "closest", "mismatch"],
     }
 
 
@@ -121,6 +140,9 @@ Rules:
 - The transcript comes from automatic speech recognition and may contain errors or mixed English/Vietnamese. Translate
   to English; when quoting, you may keep the original words in brackets.
 - Cite moments with timecodes like [00:12:31]; when there is more than one file, prefix the file id: [f2 00:12:31].
+  Files recorded together (a "Conversation" section) share one timeline: cite those with a plain [00:12:31].
+  In a conversation, "Me" is the person who made the recording and "Others" everyone else; use names instead when
+  the conversation makes them clear.
 - Embed evidence frames where they support the text, each on its own line as `![caption](evidence:ID)` using only the
   given ids, each at most once. Quote or summarise important text read from a frame next to it.
 - Output only the report Markdown, with no preamble or closing remarks."""

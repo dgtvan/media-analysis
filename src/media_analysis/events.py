@@ -16,6 +16,8 @@ class EventKind(str, Enum):
     STAGE_DONE = "stage_done"
     INFO = "info"
     WARNING = "warning"
+    SUMMARY = "summary"
+    """Sent once at the end of a run, also after a failure: how long each stage took (see core/perf.py)."""
 
 
 @dataclass(frozen=True)
@@ -25,11 +27,14 @@ class Event:
     message: str = ""
     completed: float | None = None
     total: float | None = None
+    data: dict | None = None
 
     def to_dict(self) -> dict:
         d = {"event": self.kind.value, "stage": self.stage, "message": self.message}
         if self.completed is not None:
             d["completed"], d["total"] = self.completed, self.total
+        if self.data:
+            d.update(self.data)
         return d
 
 

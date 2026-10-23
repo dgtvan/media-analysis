@@ -25,6 +25,8 @@ class Template(BaseModel):
     signals: list[str] = []
     evidence: list[str] = []
     sections: list[str]
+    fallback: bool = False
+    """Used only when no other template fits; never offered to the classifier."""
     instructions: str = ""
     source: str = ""
 
@@ -80,6 +82,26 @@ sections:           # report sections, in order
 Instructions for the report writer: tone, level of detail, what each section must contain,
 what to do when information is missing.
 """
+
+
+def render_template(
+    template_id: str, name: str, description: str, signals: list[str], evidence: list[str], sections: list[str],
+) -> str:
+    """A template file with the given front matter and placeholder instructions, ready to edit."""
+    meta = {
+        "id": template_id,
+        "name": name,
+        "description": description,
+        "signals": signals or ["..."],
+        "evidence": evidence or ["..."],
+        "sections": sections or ["Summary"],
+    }
+    front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, width=1000)
+    return (
+        f"---\n{front}---\n"
+        "Instructions for the report writer: tone, level of detail, what each section must contain,\n"
+        "what to do when information is missing.\n"
+    )
 
 
 def new_template(template_id: str, directory: Path) -> Path:

@@ -7,6 +7,7 @@ repeats the stages whose inputs changed (or those from `force_from` onwards).
 from __future__ import annotations
 
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from media_analysis.config import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, Settings
 from media_analysis.core import prompts
 from media_analysis.core.assemble import assemble_output
 from media_analysis.core.cache import Cache, digest, file_fingerprint
+from media_analysis.core.perf import StageTimer
 from media_analysis.core.models import (
     Candidates,
     Classification,
@@ -26,12 +28,13 @@ from media_analysis.core.models import (
     Ingest,
     MediaFile,
     ReportDraft,
+    SuggestedTemplate,
     Transcript,
     VisualScan,
     VisualSegment,
     format_timecode,
 )
-from media_analysis.errors import MediaAnalysisError, ProcessingStopped
+from media_analysis.errors import MediaAnalysisError
 from media_analysis.events import EventSink, Reporter, null_sink
 from media_analysis.hardware import detect
 from media_analysis.media import ffmpeg, vision
@@ -42,7 +45,7 @@ from media_analysis.templates.registry import Template, load_templates
 STAGES = ["ingest", "transcribe", "scan", "classify", "plan", "extract", "read", "report", "assemble"]
 CACHE_DIR_NAME = ".cache"
 # Bump when a stage's algorithm changes in a way that invalidates cached results.
-STAGE_VERSIONS = {"transcribe": 1, "scan": 2, "classify": 1, "plan": 1, "extract": 1, "read": 1, "report": 1}
+STAGE_VERSIONS = {"transcribe": 1, "scan": 2, "classify": 2, "plan": 1, "extract": 1, "read": 1, "report": 1}
 
 
 @dataclass
@@ -65,19 +68,31 @@ class RunResult:
 class Pipeline:
     def __init__(self, settings: Settings, sink: EventSink = null_sink) -> None:
         self.settings = settings
-        self.sink = sink
+        self.timer = StageTimer(sink)
+        self.sink = self.timer
         self._llm: LLM | None = None
 
     @property
     def llm(self) -> LLM:
         if self._llm is None:
-            self._llm = create_llm(self.settings.llm.backend, self.settings.llm.model, self.settings.llm.effort)
+            inner = create_llm(self.settings.llm.backend, self.settings.llm.model, self.settings.llm.effort)
+            self._llm = _TimedLLM(inner, self.timer)
         return self._llm
 
     def _forced(self, stage: str, force_from: str | None) -> bool:
         return force_from is not None and STAGES.index(stage) >= STAGES.index(force_from)
 
     def run(self, opts: RunOptions) -> RunResult:
+        """Runs every stage; always ends with a summary event of how long each stage took, also on failure."""
+        failed = True
+        try:
+            result = self._run(opts)
+            failed = False
+            return result
+        finally:
+            self.sink(self.timer.summary(failed))
+
+    def _run(self, opts: RunOptions) -> RunResult:
         input_dir, output_dir = opts.input_dir.resolve(), opts.output_dir.resolve()
         _check_folders(input_dir, output_dir)
         templates = load_templates(self.settings.templates_dirs)
@@ -90,6 +105,7 @@ class Pipeline:
         force = opts.force_from
 
         ingest = self.ingest(input_dir)
+        self.timer.audio_seconds = sum(f.duration for f in ingest.files if f.has_audio)
         transcript = self.transcribe(ingest, cache, self._forced("transcribe", force))
         scan = self.scan(ingest, cache, self._forced("scan", force))
         classification = self.classify(
@@ -134,6 +150,10 @@ class Pipeline:
             rep.warning(f"skipped (not video/audio): {name}")
         if not files:
             raise MediaAnalysisError(f"No video or audio files found in {input_dir}.")
+        files = _label_speakers(files)
+        labelled = [f for f in files if f.speaker]
+        if labelled:
+            rep.info("recorded together: " + ", ".join(f"{f.name} = {f.speaker}" for f in labelled))
         total = sum(f.duration for f in files)
         rep.done(f"{len(files)} file(s), {format_timecode(total)} total")
         return Ingest(files=files, skipped=skipped)
@@ -242,6 +262,10 @@ class Pipeline:
         if forced_id:
             rep.skipped(f"template forced: {forced_id}")
             return Classification(template_id=forced_id, confidence=1.0, reason="Template selected by the user.", forced=True)
+        fallback = next((t for t in templates.values() if t.fallback), None)
+        if fallback is None:
+            raise MediaAnalysisError("No fallback template found (the built-in 'generic' template is missing).")
+        templates = {tid: t for tid, t in templates.items() if not t.fallback}
         key = digest([
             transcript, scan, [t.fingerprint_parts() for t in templates.values()],
             self.settings.llm.model, self.settings.llm.effort, STAGE_VERSIONS["classify"],
@@ -259,12 +283,14 @@ class Pipeline:
                 content += [Text("# Contact sheet (thumbnails labelled with file id and time)"), Image(sheet)]
             data = self.llm.generate_json(prompts.CLASSIFY_SYSTEM, content, prompts.classify_schema(list(templates)), rep.activity)
             tid = data.get("template_id")
+            suggested = data.get("suggested_template")
             result = Classification(
-                template_id=None if tid in (None, "none") else tid,
+                template_id=tid if tid in templates else None,
                 confidence=float(data.get("confidence", 0)),
                 reason=data.get("reason", ""),
                 closest=[c for c in data.get("closest", []) if c in templates],
-                suggested_template=data.get("suggested_template") or None,
+                mismatch=[m for m in data.get("mismatch", []) if m],
+                suggested=SuggestedTemplate(**suggested) if isinstance(suggested, dict) and suggested.get("id") else None,
             )
             cache.save("classify", key, result)
             cached_note = ""
@@ -272,7 +298,13 @@ class Pipeline:
             cached_note = ", cached"
         min_conf = self.settings.llm.classify_min_confidence
         if result.template_id is None or result.confidence < min_conf:
-            raise ProcessingStopped(_stop_message(result, min_conf))
+            # A weak best guess is still the closest match.
+            closest = [result.template_id] if result.template_id else []
+            closest += [c for c in result.closest if c not in closest]
+            result = result.model_copy(update={"template_id": fallback.id, "closest": closest[:3], "fallback": True})
+            rep.warning(f"no template fits: {result.reason}")
+            rep.done(f"no template fits, writing a {fallback.name.lower()} report{cached_note}")
+            return result
         rep.done(f"{result.template_id} (confidence {result.confidence:.2f}{cached_note})")
         return result
 
@@ -487,6 +519,43 @@ class Pipeline:
         return draft
 
 
+class _TimedLLM:
+    """Passes calls through to the real client and records how long each took."""
+
+    def __init__(self, inner: LLM, timer: StageTimer) -> None:
+        self._inner = inner
+        self._timer = timer
+        self.model = inner.model
+        self.effort = inner.effort
+
+    def generate_json(self, system, content, schema, on_activity=None):
+        started = time.monotonic()
+        try:
+            return self._inner.generate_json(system, content, schema, on_activity)
+        finally:
+            self._timer.add_claude_call(time.monotonic() - started)
+
+    def generate_text(self, system, content, on_activity=None):
+        started = time.monotonic()
+        try:
+            return self._inner.generate_text(system, content, on_activity)
+        finally:
+            self._timer.add_claude_call(time.monotonic() - started)
+
+
+# Meeting Recorder saves one folder per recording: video.mp4 (screen, no sound), audio-mic.wav (the person
+# recording) and audio-system.wav (everyone heard through the computer), all starting at the same moment.
+_SPEAKER_FILES = {"audio-mic": "Me", "audio-system": "Others"}
+
+
+def _label_speakers(files: list[MediaFile]) -> list[MediaFile]:
+    """Marks the audio files of a Meeting Recorder folder with their speaker, so their transcripts are merged."""
+    speakers = {f.id: _SPEAKER_FILES.get(Path(f.name).stem.lower()) for f in files if f.has_audio}
+    if not any(speakers.values()):
+        return files
+    return [f.model_copy(update={"speaker": speakers.get(f.id)}) for f in files]
+
+
 def _relabel(ft: FileTranscript, file_id: str) -> FileTranscript:
     """Cached transcripts are keyed by content, so the same file may have had another id in an earlier run."""
     return ft.model_copy(update={"file_id": file_id})
@@ -507,21 +576,3 @@ def _check_folders(input_dir: Path, output_dir: Path) -> None:
                 "Use an empty or new folder."
             )
 
-
-def _stop_message(c: Classification, min_conf: float) -> str:
-    lines = ["No template fits this recording well enough, so processing stopped."]
-    if c.template_id:
-        lines.append(f"Best guess: {c.template_id} with confidence {c.confidence:.2f} (minimum {min_conf:.2f}).")
-    lines.append(f"Reason: {c.reason}")
-    if c.closest:
-        lines.append(f"Closest templates: {', '.join(c.closest)}")
-    if c.suggested_template:
-        lines.append(f"Suggested new template: {c.suggested_template}")
-    lines += [
-        "",
-        "To continue, either:",
-        "  - rerun with a template:   media-analysis run <input> <output> --template <id>",
-        "  - or create a template:    media-analysis templates new <id>   (then rerun)",
-        "The transcript and visual scan are cached, so a rerun only repeats the Claude steps.",
-    ]
-    return "\n".join(lines)

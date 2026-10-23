@@ -101,8 +101,9 @@ Each stage is idempotent, reads the previous stage's artifact and writes its own
 4. **Classify (processing type)** — one LLM call with: the transcript, the visual segment list, and one contact sheet
    (a grid of up to ~16 segment thumbnails). The model picks one template from the registry and returns
    `{template_id, confidence, reason}`.
-   - No template fits (or confidence below threshold) → **stop** with the reason, the closest templates, and the
-     commands to continue (§5).
+   - No template fits (or confidence below threshold) → use the built-in `generic` template (`fallback: true`, never
+     offered to the classifier). The report ends with a "Template fit" section (reason, closest templates, key points
+     on what doesn't match) and `reference/suggested-template.md`, a ready-to-edit template for this kind of recording.
    - `--template <id>` skips this step.
 5. **Frame plan** — one LLM call with the chosen template's evidence guidance, the transcript and the visual segments.
    Returns a list of evidence requests: `{start, end, reason, what_to_look_for, priority}`.
@@ -147,7 +148,7 @@ Built-in: `meeting`, `technical-discussion`, `lecture-tutorial`, `interview`, `l
 - `language-practice` includes a learner assessment: grammar mistakes with corrections, vocabulary, fluency,
   pronunciation notes (from transcript evidence), and suggested exercises.
 
-User templates live in a user folder (`%APPDATA%\MediaAnalysis\templates\` on Windows, `~/.media-analysis/templates/` elsewhere) and override built-ins with the same id.
+User templates live in a user folder (`%LOCALAPPDATA%\MediaAnalysis\data\templates\` on Windows, `~/.media-analysis/templates/` elsewhere) and override built-ins with the same id.
 
 CLI:
 - `media-analysis templates list`
@@ -190,7 +191,7 @@ src/media_analysis/
 tests/
 ```
 
-- The pipeline emits progress events (`stage_started`, `progress`, `stage_done`, `stopped`, `error`) to a callback.
+- The pipeline emits progress events (`stage_started`, `progress`, `stage_done`, `summary`, `error`) to a callback.
   The CLI renders them with Rich; a later UI subscribes to the same events.
 - Later UI path: a small FastAPI service wraps the core (start job, stream events over SSE, fetch output), and any
   front end (web, Tauri, Electron) talks to it. No core changes needed.
@@ -201,13 +202,16 @@ tests/
 |---|---|
 | M0 | Project skeleton (`uv`, package layout, CLI), config, `doctor` (ffmpeg, GPU, API key) |
 | M1 | Ingest + transcription (GPU/CPU, mixed EN/VI, chunk checkpoints) → cached `transcript.json`; cache/resume |
-| M2 | Visual scan + template registry + classification + stop-with-reason + `--template` + `templates list/new` |
+| M2 | Visual scan + template registry + classification + generic fallback (was: stop-with-reason) + `--template` + `templates list/new` |
 | M3 | Frame plan + dense extraction + sharpest-frame selection + vision reading (text + description) |
 | M4 | Report generation + output assembly + link validation; all six built-in templates |
 | M5 | Optional diarization; draft-a-template-from-a-run helper |
+| T1 | Tray app (.NET): watch a projects folder, recent-projects menu with Analyse, working/waiting/idle icon, self-update; core stays analysis-only |
+| T2 | Full window (projects grid with status, elapsed and actions; live logs; Config/Templates/About tabs); run history; core: generic report instead of stopping, Meeting Recorder folders as one session, performance summary |
 
 Status: M0–M4 implemented and verified end to end on a synthetic sample (video and audio-only, detection, forced
-template, stop-with-reason, user template, cached rerun). M5 not started.
+template, user template, cached rerun). T1 and T2 implemented (docs/DEPLOYMENT.md, README "Windows app").
+M5 not started.
 
 Testing: unit tests for segmentation, hashing, audio chunking, cache keys, templates and output assembly; a short
 synthetic video (`tests/make_sample.py`, Windows text-to-speech) for an end-to-end smoke test.

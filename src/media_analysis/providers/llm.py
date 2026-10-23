@@ -149,6 +149,8 @@ class SubscriptionLLM:
             verbatim_prompts=True,
             include_partial_messages=on_activity is not None,
             output_format={"type": "json_schema", "schema": schema} if schema else None,
+            # Each call is self-contained; without this Claude Code saves every transcript to the user's Claude history.
+            extra_args={"no-session-persistence": None},
         )
         blocks = _to_api_blocks(content)
 

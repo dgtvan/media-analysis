@@ -4,8 +4,12 @@
 
 .DESCRIPTION
     Makes sure the shared pieces exist (Python, package store, ffmpeg, Whisper model), creates the dependency
-    environment for the current uv.lock if it is new, then drops the app code as a new build folder and applies
-    retention. Touches only D:\Apps; never an account's install, registry or profile.
+    environment for the current uv.lock if it is new, then builds the tray app and drops it with the core as a
+    new build folder, applies retention and waits up to 30 s for each account's tray app to report.
+    Touches only D:\Apps; never an account's install, registry or profile, and never folder permissions.
+
+    Exit codes: 0 every account runs the new build, 1 error, 5 an account waits until its app is idle,
+    6 an account didn't answer or nobody has installed the app yet, 7 an account failed to install it.
 #>
 [CmdletBinding()]
 param(
@@ -119,36 +123,49 @@ try {
     $build = Join-Path $Publish "builds\$buildId"
     Step "Build $buildId"
     New-Item -ItemType Directory -Force -Path (Join-Path $build 'app') | Out-Null
+    & dotnet publish (Join-Path $Repo 'tray\MediaAnalysis.Tray') -c Release -o $build --nologo -v quiet | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Building the tray app failed.' }
     robocopy (Join-Path $Repo 'src\media_analysis') (Join-Path $build 'app\media_analysis') /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP | Out-Null
-    if ($LASTEXITCODE -ge 8) { throw "Copying the app code failed (robocopy exit $LASTEXITCODE)." }
-    $run = @(
-        '@echo off'
-        'setlocal'
-        'set "PYTHONPATH=%~dp0app"'
-        "set `"MEDIA_ANALYSIS_FFMPEG_DIR=$ffmpegDir`""
-        "set `"MEDIA_ANALYSIS_MODELS_DIR=$ModelsDir`""
-        'set "HF_HUB_DISABLE_SYMLINKS_WARNING=1"'
-        "`"$envPython`" -m media_analysis %* & exit /b"
-    )
-    Set-Content -Path (Join-Path $build 'run.cmd') -Value $run -Encoding ascii
-    Copy-Item (Join-Path $PSScriptRoot 'media-analysis.cmd') $build
+    if ($LASTEXITCODE -ge 8) { throw "Copying the core failed (robocopy exit $LASTEXITCODE)." }
+    Invoke-Checked $envPython @('-m', 'compileall', '-q', (Join-Path $build 'app'))
+    $coreEnv = [ordered]@{
+        MEDIA_ANALYSIS_FFMPEG_DIR       = $ffmpegDir
+        MEDIA_ANALYSIS_MODELS_DIR       = $ModelsDir
+        HF_HUB_DISABLE_SYMLINKS_WARNING = '1'
+        # The app never writes into its install folder (standard 2.2); bytecode is compiled into the build below.
+        PYTHONDONTWRITEBYTECODE         = '1'
+    }
+    # How the tray starts the core.
+    [ordered]@{ Python = $envPython; PythonPath = 'app'; Environment = $coreEnv } | ConvertTo-Json |
+        Set-Content -Path (Join-Path $build 'core.json') -Encoding utf8
+    # The same core for the command line; on PATH through the install folder.
+    $cli = @('@echo off', 'setlocal', 'set "PYTHONPATH=%~dp0app"') +
+        @($coreEnv.Keys | ForEach-Object { "set `"$_=$($coreEnv[$_])`"" }) +
+        @("`"$envPython`" -m media_analysis %*")
+    Set-Content -Path (Join-Path $build 'media-analysis.cmd') -Value $cli -Encoding ascii
+    Copy-Item (Join-Path $PSScriptRoot 'apply-update.cmd') $build
     Copy-Item (Join-Path $PSScriptRoot 'uninstall.ps1') $build
     Set-Content -Path (Join-Path $build 'env-id.txt') -Value $envId -Encoding ascii
-    Set-Content -Path (Join-Path $build 'update-source.txt') -Value $Publish -Encoding ascii
-    Set-Content -Path (Join-Path $build 'build-id.txt') -Value $buildId -Encoding ascii
+    Set-Content -Path (Join-Path $build 'update-source.txt') -Value $Publish -NoNewline -Encoding ascii
+    # Written last: apps ignore a build folder until this marker matches its name.
+    Set-Content -Path (Join-Path $build 'build-id.txt') -Value $buildId -NoNewline -Encoding ascii
 
-    # 6. Retention: newest builds plus any build an account has installed (its run.cmd still points at that
-    #    build's environment), then environments no kept build uses. Shared runtimes and models are never
-    #    deleted here because other apps may use them.
-    $installed = Get-ChildItem (Join-Path $Publish 'pickup') -Filter status.txt -Recurse -ErrorAction SilentlyContinue |
-        ForEach-Object { @(Get-Content $_.FullName)[1] }
+    # 6. Retention: the newest builds plus any build an account has installed or is installing (its core.json
+    #    still points at that build's environment), then environments no kept build uses. Shared runtimes and
+    #    models are never deleted here because other apps may use them.
+    $pickup = Join-Path $Publish 'pickup'
+    $inUse = @(Get-ChildItem $pickup -Filter status.txt -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $lines = @(Get-Content $_.FullName)
+        if ($lines.Count -ge 2) { $lines[1] }
+        if ($lines.Count -ge 3 -and $lines[0] -eq 'applying') { $lines[2] }
+    })
     $builds = Get-ChildItem (Join-Path $Publish 'builds') -Directory
     $ready = $builds | Where-Object { Test-ReadyBuild $_ } | Sort-Object Name -Descending
-    $stale = @($ready | Select-Object -Skip $KeepBuilds | Where-Object { $installed -notcontains $_.Name }) +
-        @($builds | Where-Object { -not (Test-ReadyBuild $_) -and $_.LastWriteTimeUtc -lt (Get-Date).ToUniversalTime().AddHours(-1) })
+    $stale = @($ready | Select-Object -Skip $KeepBuilds | Where-Object { $inUse -notcontains $_.Name }) +
+        @($builds | Where-Object { -not (Test-ReadyBuild $_) -and $_.Name -ne $buildId -and $_.LastWriteTimeUtc -lt (Get-Date).ToUniversalTime().AddHours(-1) })
     foreach ($dir in $stale) {
         Step "Removing build $($dir.Name)"
-        Remove-Item $dir.FullName -Recurse -Force
+        Remove-Item $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
     $usedEnvs = Get-ChildItem (Join-Path $Publish 'builds') -Directory |
         ForEach-Object { Get-Content (Join-Path $_.FullName 'env-id.txt') -TotalCount 1 -ErrorAction SilentlyContinue }
@@ -160,20 +177,41 @@ try {
             Write-Warning "Environment $($dir.Name) is in use; it will be removed by a later publish."
         }
     }
-
-    # 7. Pickup folders: each account's launcher reports there.
-    $pickup = Join-Path $Publish 'pickup'
     New-Item -ItemType Directory -Force -Path $pickup | Out-Null
+    Write-Host "Published $buildId" -ForegroundColor Green
 
-    # 8. Report. A CLI only updates when it is next run, so accounts on an older build are expected.
-    Write-Host ''
-    Write-Host "Published $buildId"
-    foreach ($status in Get-ChildItem $pickup -Filter status.txt -Recurse -ErrorAction SilentlyContinue) {
-        $lines = @(Get-Content $status.FullName)
-        $note = if ($lines[1] -eq $buildId) { '' } else { ' (updates on next run)' }
-        Write-Host "  $($status.Directory.Name): $($lines[0]) on $($lines[1]), $($lines[3])$note"
+    # 7. Report what each account's tray app did with it (App deployment standard, section 5.1).
+    $accounts = @(Get-ChildItem $pickup -Directory -ErrorAction SilentlyContinue)
+    if ($accounts.Count -eq 0) {
+        Write-Host 'No account has installed the app yet. Each user runs install.cmd once from their own account.' -ForegroundColor Yellow
+        exit 6
     }
-    exit 0
+    Step 'Waiting for each account''s app to report (up to 30 s)'
+    $results = @{}
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        foreach ($account in $accounts) {
+            $lines = @(Get-Content (Join-Path $account.FullName 'status.txt') -ErrorAction SilentlyContinue)
+            if ($lines.Count -lt 3) { continue }
+            $state = $lines[0]
+            if ($state -eq 'running' -and $lines[1] -eq $buildId) { $results[$account.Name] = 'running' }
+            elseif ($state -like 'failed*' -and $lines[2] -eq $buildId) { $results[$account.Name] = $state }
+            elseif ($state -like 'waiting*' -and $state -like "*$buildId*") { $results[$account.Name] = $state }
+        }
+        $settled = $results.Count -eq $accounts.Count
+        if (-not $settled) { Start-Sleep -Milliseconds 500 }
+    } while (-not $settled -and (Get-Date) -lt $deadline)
+
+    $exitCode = 0
+    $rank = @{ 0 = 0; 6 = 1; 5 = 2; 7 = 3 }
+    foreach ($account in $accounts) {
+        $result = $results[$account.Name]
+        if (-not $result) { $result = 'no answer (app not running?); it installs the build when it next starts' }
+        Write-Host "$($account.Name): $result"
+        $code = if ($result -eq 'running') { 0 } elseif ($result -like 'failed*') { 7 } elseif ($result -like 'waiting*') { 5 } else { 6 }
+        if ($rank[$code] -gt $rank[$exitCode]) { $exitCode = $code }
+    }
+    exit $exitCode
 } catch {
     Write-Host "Publish failed: $_" -ForegroundColor Red
     exit 1

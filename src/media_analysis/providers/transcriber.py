@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from media_analysis.config import TranscriptionSettings
+from media_analysis.config import USER_MODELS_DIR, TranscriptionSettings
 from media_analysis.core.models import TranscriptSegment
 from media_analysis.hardware import Hardware
 
@@ -37,10 +37,11 @@ class FasterWhisperTranscriber:
             # Use a local copy (shared first, then the user's own) without touching the network. Otherwise download
             # into the shared folder so every account gets it, or into the user's cache if that folder isn't writable.
             shared = str(self.settings.models_dir) if self.settings.models_dir else None
+            own = {"download_root": str(USER_MODELS_DIR)} if USER_MODELS_DIR else {}
             attempts = [{"download_root": shared, "local_files_only": True}] if shared else []
-            attempts += [{"local_files_only": True}]
+            attempts += [{**own, "local_files_only": True}]
             attempts += [{"download_root": shared}] if shared else []
-            attempts += [{}]
+            attempts += [own]
             for i, extra in enumerate(attempts):
                 try:
                     self._model = WhisperModel(self.settings.model, **extra, **kwargs)

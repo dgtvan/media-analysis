@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from media_analysis.core.models import Classification, Evidence, EvidenceItem, Ingest, ReportDraft, format_timecode
-from media_analysis.templates.registry import Template
+from media_analysis.templates.registry import Template, render_template
 
 _EVIDENCE_IMAGE = re.compile(r"!\[([^\]]*)\]\(evidence:([A-Za-z0-9_-]+)\)")
 _EVIDENCE_ANY = re.compile(r"\(evidence:([A-Za-z0-9_-]+)\)")
@@ -86,8 +86,14 @@ def assemble_output(
         title, rest = f"# {draft.title}", lines
     while rest and not rest[0].strip():
         rest = rest[1:]
+    if classification.fallback:
+        rest += ["", *_template_fit(classification, reference)]
     sources = ", ".join(f"{f.name} ({format_timecode(f.duration)})" for f in ingest.files)
-    chosen = f"{template.name} (`{template.id}`)" + (" — selected by user" if classification.forced else "")
+    chosen = f"{template.name} (`{template.id}`)"
+    if classification.forced:
+        chosen += " — selected by user"
+    elif classification.fallback:
+        chosen += " — no template fit, see [Template fit](#template-fit)"
     meta = [
         "",
         f"> **Processing type:** {chosen}  ",
@@ -101,3 +107,32 @@ def assemble_output(
     if unused > 0:
         warnings.append(f"{unused} evidence frame(s) were not used by the report and were left out")
     return report_path, warnings
+
+
+def _template_fit(c: Classification, reference: Path) -> list[str]:
+    """The section explaining why no template fit, and a ready-to-edit template file for this kind of recording."""
+    lines = [
+        "## Template fit",
+        "",
+        "No existing template fits this recording, so this is a general report.",
+        "",
+        f"**Why:** {c.reason}",
+    ]
+    if c.closest:
+        lines += ["", "**Closest templates:** " + ", ".join(f"`{t}`" for t in c.closest)]
+    if c.mismatch:
+        lines += ["", "**Why they don't fit:**", *[f"- {m}" for m in c.mismatch]]
+    if c.suggested:
+        s = c.suggested
+        reference.mkdir(parents=True, exist_ok=True)
+        (reference / "suggested-template.md").write_text(
+            render_template(s.id, s.name, s.description, s.signals, s.evidence, s.sections), encoding="utf-8"
+        )
+        lines += [
+            "",
+            f"**Suggested new template:** `{s.id}` ({s.name}): {s.description}",
+            "",
+            "A ready-to-edit copy is in [reference/suggested-template.md](reference/suggested-template.md). Put it in your "
+            "templates folder to use it for recordings like this one, or widen the signals of one of the closest templates.",
+        ]
+    return lines

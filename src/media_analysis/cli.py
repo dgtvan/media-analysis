@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
@@ -73,6 +74,9 @@ class ConsoleSink:
                 self.console.print(f"[dim]✓ {e.stage}: {e.message}[/]")
         elif e.kind == EventKind.WARNING:
             self.console.print(f"[yellow]  ! {e.message}[/]")
+        elif e.kind == EventKind.SUMMARY:
+            self._close_live()
+            self.console.print(f"\n[dim]{e.message}[/]", highlight=False)
         elif e.kind == EventKind.INFO and self.verbose:
             self.console.print(f"[dim]  {e.message}[/]")
 
@@ -154,23 +158,33 @@ def run(
         ))
     except MediaAnalysisError as e:
         sink.close()
-        stopped = e.exit_code == 10
         if isinstance(sink, JsonSink):
-            sink.emit({"event": "stopped" if stopped else "error", "exit_code": e.exit_code, "message": str(e)})
+            sink.emit({"event": "error", "exit_code": e.exit_code, "message": str(e)})
         else:
-            console.print(f"\n[bold red]Stopped:[/] {e}" if stopped else f"\n[bold red]Error:[/] {e}")
+            console.print(f"\n[bold red]Error:[/] {e}")
         raise typer.Exit(e.exit_code) from None
+    except Exception as e:
+        sink.close()
+        # The traceback goes to stderr (the tray app keeps it in the run's log); callers get a one-line reason.
+        traceback.print_exc()
+        if isinstance(sink, JsonSink):
+            sink.emit({"event": "error", "exit_code": 1, "message": f"Unexpected error: {type(e).__name__}: {e}"})
+        raise typer.Exit(1) from None
     finally:
         sink.close()
     c = result.classification
     if isinstance(sink, JsonSink):
         sink.emit({
             "event": "finished", "report": str(result.report_path), "template": c.template_id,
-            "confidence": c.confidence, "reason": c.reason, "evidence_frames": result.evidence_count,
+            "generic": c.fallback, "confidence": c.confidence, "reason": c.reason,
+            "evidence_frames": result.evidence_count,
         })
         return
     console.print(f"\n[bold green]Done.[/] Report: {result.report_path}")
-    console.print(f"Processing type: {c.template_id}" + ("" if c.forced else f" ({c.reason})"))
+    if c.fallback:
+        console.print(f"No template fits ({c.reason}); wrote a general report. See its 'Template fit' section.")
+    else:
+        console.print(f"Processing type: {c.template_id}" + ("" if c.forced else f" ({c.reason})"))
 
 
 @app.command()

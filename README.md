@@ -39,15 +39,57 @@ See [docs/PLAN.md](docs/PLAN.md) for the design.
 The first run downloads the Whisper model (large-v3, about 3 GB), unless `MEDIA_ANALYSIS_MODELS_DIR` points at a
 shared copy.
 
+## Windows app
+
+A Windows app (`tray/`) runs in the background with an icon in the tray and watches a **projects folder**: each
+subfolder is a project (one recording session). Each project's report goes to `<output folder>\<project name>`.
+
+- **Tray icon** (sound-wave bars): blue = working (an analysis runs or is queued), amber = waiting (a project has
+  video/audio but no up-to-date report), grey = idle. A project counts as analysed when its `report.md` is newer than
+  all of its media files, so adding a file makes it waiting again. Its menu has *Status* (the window) and *Exit*;
+  double-clicking it also opens the window.
+- **Projects tab**: every project with its name (yours to change: F2, typing, or right-click → *Rename*; the folder
+  itself is never renamed and reports stay in `<output folder>\<folder name>`; clear the name to go back to the folder
+  name), its folder, a plain-language status (*Transcribing audio… 45%*, *Writing the report…*,
+  *Done*, *Failed: …*, *Stopped by you*, *Not analysed*, *Ignored*), the elapsed time (live while running; the last
+  run's time otherwise), when it was last analysed, and the number of media files. Right-click a project for its
+  actions (*Analyse* / *Analyse again*, *Stop analysis* or *Remove from queue*, *Ignore* / *Unignore*), then what to
+  open (*View logs*, *Open report*, *Open project folder*, *Open output folder*) and, after a general report, *Add the
+  suggested template*. Double-click opens the report (or the project folder). One analysis runs at a time; others
+  queue. Stopping is cheap: analysing again continues from the cache. An ignored project no longer counts as waiting
+  and is never started automatically. Filter, search, and *Analyse all not analysed* sit above the grid.
+- **Logs**: each analysis is logged from its first line to `%LOCALAPPDATA%\MediaAnalysis\data\logs`, ending with a
+  performance summary (time per step, cached or not, transcription speed, Claude calls). The log window follows a
+  running analysis live and has a readable and a full view.
+- **Config tab**: projects and output folders, *Analyse new projects automatically*, transcription model, spoken
+  language, Claude thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\MediaAnalysis\data\settings.json`).
+- **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\MediaAnalysis\data\templates`), with *New*, *Open* and
+  *Copy to my templates*.
+- **Automatic analysis** (off by default): projects added after you turn it on are queued once their files have
+  stopped changing for 2 minutes (shown as *New: starts once its files stop changing*). Existing projects are left
+  alone, and a failed or stopped analysis isn't retried automatically.
+- **About tab**: installed build, update status, where the engine, settings and logs are.
+- **Needs attention**: a failed analysis or a broken install turns the icon into a warning and shows a banner in the
+  window until you dismiss it.
+
+The app starts at sign-in and updates itself; the analysis core has no update logic of its own. Results (outcome,
+elapsed time, log) are kept in `%LOCALAPPDATA%\MediaAnalysis\data\history.json`, so they survive restarts.
+
+### Meeting Recorder folders
+
+A folder with Meeting Recorder's layout (`video.mp4` without sound, `audio-mic.wav`, `audio-system.wav`) is one
+session: the two transcripts are merged into one conversation on a shared timeline, labelled *Me* (microphone) and
+*Others* (computer audio), and frames come from the video.
+
 ## Installing on a shared Windows PC
 
-Follows the [App deployment standard v1.3](https://github.com/dgtvan/local-app-deployment-strategy), adapted for a
-CLI whose Python, libraries, ffmpeg and Whisper model are shared on `D:` by all accounts and builds; see
+Follows the [App deployment standard v1.4](https://github.com/dgtvan/local-app-deployment-strategy), with the core's
+Python, libraries, ffmpeg and Whisper model shared on `D:` by all accounts and builds; see
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```
 publish.cmd          # agent/developer: publish a build to D:\Apps\MediaAnalysis
-install.cmd          # each account, once: puts `media-analysis` on that account's PATH (updates itself on each run)
+install.cmd          # each account, once: installs and starts the tray app, puts `media-analysis` on PATH
 media-analysis run <input-folder> <output-folder>
 ```
 
@@ -81,7 +123,8 @@ extraction, and what Claude is doing during the Claude steps (`thinking`, `writi
 Programs can follow a run in two ways:
 
 - **CLI:** `--json` prints one JSON object per line: `stage_started`, `progress` (`completed`/`total`), `activity`,
-  `warning`, `stage_done` / `stage_skipped`, and finally `finished`, `stopped` (exit code 10) or `error`.
+  `warning`, `stage_done` / `stage_skipped`, `summary` (time per stage; also after a failure), and finally
+  `finished` (with `generic: true` when no template fit) or `error`.
 - **Python:** pass a callback that receives `Event` objects:
 
   ```python
@@ -98,15 +141,17 @@ minutes.
 
 ```
 uv run media-analysis templates list
-uv run media-analysis templates new sales-call      # creates %APPDATA%\MediaAnalysis\templates\sales-call.md
+uv run media-analysis templates new sales-call      # creates %LOCALAPPDATA%\MediaAnalysis\data\templates\sales-call.md
 ```
 
 A template is a Markdown file with YAML front matter (`id`, `name`, `description`, `signals`, `evidence`, `sections`)
 followed by instructions for the report writer. User templates override built-ins with the same id; `--templates-dir`
 adds more folders.
 
-When no template fits, the run stops (exit code 10) with the reason, the closest templates and a suggested new one.
-Rerun with `--template <id>` or after creating a template; the transcript and scan are reused from the cache.
+When no template fits, the report uses the built-in `generic` template and ends with a **Template fit** section: why
+no template fits, the closest templates, key points on what doesn't match, and a suggested new template. A
+ready-to-edit copy of it is written to `reference/suggested-template.md`; put it in your templates folder (or widen
+one of the closest templates) and analyse again. The transcript and scan are reused from the cache.
 
 ## Development
 

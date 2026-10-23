@@ -7,3 +7,7 @@ dist/
 .pytest_cache/
 .notes/
 uv.toml
+bin/
+obj/
+.vs/
+*.user

@@ -9,12 +9,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# The Windows app keeps everything per user in %LOCALAPPDATA%\MediaAnalysis\data (App deployment standard v1.4).
 USER_HOME = (
-    Path(os.environ["APPDATA"]) / "MediaAnalysis"
-    if sys.platform == "win32" and os.environ.get("APPDATA")
+    Path(os.environ["LOCALAPPDATA"]) / "MediaAnalysis" / "data"
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA")
     else Path.home() / ".media-analysis"
 )
 USER_TEMPLATES_DIR = USER_HOME / "templates"
+USER_MODELS_DIR = USER_HOME / "models" if sys.platform == "win32" else None
+"""Where a model goes when the shared folder can't take it (None = Hugging Face's default cache)."""
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr"}
