@@ -113,15 +113,19 @@ def run(
     template: Annotated[Optional[str], typer.Option("--template", "-t", help="Use this template instead of detecting one.")] = None,
     force: Annotated[Optional[str], typer.Option(help=f"Redo this stage and all later ones: {', '.join(STAGES[1:])}.")] = None,
     clean_cache: Annotated[bool, typer.Option(help="Delete the working cache after a successful run.")] = False,
+    fresh: Annotated[bool, typer.Option(help="Delete the working cache of earlier runs first and redo every stage.")] = False,
     whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model, e.g. large-v3, large-v3-turbo, medium.")] = None,
     device: Annotated[Optional[str], typer.Option(help="Transcription device: auto, cpu or cuda.")] = None,
     language: Annotated[Optional[str], typer.Option(help="Spoken language hint (en, vi). Default: detect, mixed allowed.")] = None,
     backend: Annotated[Optional[str], typer.Option(help="Claude access: subscription (default) or api.")] = None,
     claude_model: Annotated[Optional[str], typer.Option(help="Claude model id. Default: your account's default model.")] = None,
     effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort: low, medium, high, xhigh, max. Default: the model's default.")] = None,
+    claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use, e.g. ~/.claude-work. Default: Claude Code's default.")] = None,
     max_frames: Annotated[Optional[int], typer.Option(help="Maximum number of moments to capture as evidence.")] = None,
     templates_dir: Annotated[Optional[list[Path]], typer.Option(help="Extra folder(s) with user templates.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print progress as JSON Lines on stdout instead of the console view.")] = False,
+    project_name: Annotated[Optional[str], typer.Option(help="Name of the project to record in the run statistics. Default: the folder name.")] = None,
+    log_file: Annotated[Optional[Path], typer.Option(help="Log file of this run, to record in the run statistics.")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Analyse INPUT_DIR and write report.md and reference/ into OUTPUT_DIR."""
@@ -146,6 +150,8 @@ def run(
         if effort not in EFFORT_LEVELS:
             raise typer.BadParameter(f"must be one of: {', '.join(EFFORT_LEVELS)}", param_hint="--effort")
         settings.llm.effort = effort  # type: ignore[assignment]
+    if claude_profile:
+        settings.llm.claude_profile = claude_profile
     if max_frames is not None:
         settings.evidence.max_requests = max_frames
     if templates_dir:
@@ -155,6 +161,7 @@ def run(
     try:
         result = Pipeline(settings, sink).run(RunOptions(
             input_dir=input_dir, output_dir=output_dir, template_id=template, force_from=force, clean_cache=clean_cache,
+            project_name=project_name, log_file=log_file, fresh=fresh,
         ))
     except MediaAnalysisError as e:
         sink.close()
@@ -190,6 +197,7 @@ def run(
 @app.command()
 def doctor(
     check_claude: Annotated[bool, typer.Option(help="Also make one small Claude call to confirm the login works.")] = False,
+    claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to check.")] = None,
 ) -> None:
     """Check ffmpeg, GPU/CPU, whisper and Claude access."""
     from media_analysis.hardware import detect
@@ -220,19 +228,21 @@ def doctor(
             "Claude",
             "[yellow]ANTHROPIC_API_KEY is set: the api backend would use it; the subscription backend ignores it[/]",
         )
-    creds = Path.home() / ".claude" / ".credentials.json"
-    if creds.exists() or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        table.add_row("Claude login", "[green]found[/]")
+    settings = Settings()
+    if claude_profile:
+        settings.llm.claude_profile = claude_profile
+    profile = settings.llm.profile_dir()
+    if (profile / ".credentials.json").exists() or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        table.add_row("Claude login", f"[green]found[/] [dim]({profile})[/]")
     else:
-        table.add_row("Claude login", "[yellow]not found: run `claude` and /login, or `claude setup-token`[/]")
+        table.add_row("Claude login", f"[yellow]not found in {profile}: run `claude` and /login, or `claude setup-token`[/]")
     console.print(table)
 
     if check_claude:
         from media_analysis.providers.llm import Text, create_llm
 
-        settings = Settings()
         try:
-            llm = create_llm(settings.llm.backend, settings.llm.model, settings.llm.effort)
+            llm = create_llm(settings.llm.backend, settings.llm.model, settings.llm.effort, settings.llm.claude_profile)
             answer = llm.generate_json(
                 "Reply via the required output format.", [Text("Say OK.")],
                 {"type": "object", "properties": {"reply": {"type": "string"}}, "required": ["reply"]},

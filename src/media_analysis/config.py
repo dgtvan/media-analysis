@@ -57,7 +57,18 @@ class LlmSettings(BaseModel):
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
         None, description="Thinking effort. None = the model's default."
     )
+    claude_profile: Path | None = Field(
+        None, description="Claude Code config folder to sign in with (CLAUDE_CONFIG_DIR). None = Claude Code's default.",
+    )
     classify_min_confidence: float = 0.5
+
+    def profile_dir(self) -> Path:
+        """The Claude Code config folder that holds the login used for analyses."""
+        if self.claude_profile:
+            return self.claude_profile
+        if env := os.environ.get("CLAUDE_CONFIG_DIR"):
+            return Path(env)
+        return Path.home() / ".claude"
 
 
 class Settings(BaseModel):
@@ -66,3 +77,7 @@ class Settings(BaseModel):
     evidence: EvidenceSettings = EvidenceSettings()
     llm: LlmSettings = LlmSettings()
     templates_dirs: list[Path] = Field(default_factory=lambda: [USER_TEMPLATES_DIR])
+    stats_file: Path | None = Field(
+        default_factory=lambda: USER_HOME / "stats" / "runs.jsonl",
+        description="Where each run appends one JSON line for statistics (see core/perf.py). None = don't record.",
+    )

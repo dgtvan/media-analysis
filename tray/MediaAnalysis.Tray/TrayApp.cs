@@ -22,11 +22,15 @@ sealed class TrayApp : ApplicationContext, IAppHost
     private readonly ContextMenuStrip _menu;
     // Also how soon a settled new project starts when auto-analysis is on.
     private readonly System.Windows.Forms.Timer _rescanTimer = new() { Interval = 30_000 };
+    private readonly System.Windows.Forms.Timer _animationTimer = new() { Interval = (int)TrayIcons.FrameInterval.TotalMilliseconds };
+    private Icon[]? _animation;
+    private int _frame;
     private readonly List<string> _problems = [];
     private readonly EventWaitHandle _exitRequest = new(false, EventResetMode.AutoReset, @"Local\MediaAnalysis-Exit");
     private readonly EventWaitHandle _exitRefused = new(false, EventResetMode.AutoReset, @"Local\MediaAnalysis-ExitRefused");
     private readonly RegisteredWaitHandle _exitWait;
     private readonly AnalysisRunner _runner;
+    private readonly MediaDurations _durations;
     private readonly SynchronizationContext _ui;
     private MainForm? _window;
     private FileSystemWatcher? _watcher;
@@ -43,7 +47,7 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _settings = AppSettings.Load(out string? settingsLoadError);
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _runner = new AnalysisRunner(_ui, LoadCore, _settings.CoreArguments,
-            new RunHistory(AppPaths.History));
+            new RunHistory(AppPaths.History), _settings.DisplayName);
 
         _menu = new ContextMenuStrip();
         _menu.Items.Add(new ToolStripMenuItem("Status", null, (_, _) => ShowWindow()) { Font = new Font(_menu.Font, FontStyle.Bold) });
@@ -59,14 +63,26 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _tray.BalloonTipClicked += (_, _) =>
         {
             if (_problems.Count == 0 && _lastReport != null && File.Exists(_lastReport))
-                Process.Start(new ProcessStartInfo(_lastReport) { UseShellExecute = true });
+            {
+                if (ReportOpener.Open(_lastReport, _settings.ClaudeProfileInUse()) is { } error)
+                    AddProblem(error);
+            }
             else
                 ShowWindow();
         };
 
+        _durations = new MediaDurations(FindFfprobe);
+        _durations.Changed += () => _ui.Post(_ => Changed?.Invoke(), null);
         _runner.Changed += Refresh;
         _runner.Finished += OnAnalysisFinished;
         _rescanTimer.Tick += (_, _) => Rescan();
+        _animationTimer.Tick += (_, _) =>
+        {
+            if (_animation == null)
+                return;
+            _frame = (_frame + 1) % _animation.Length;
+            _tray.Icon = _animation[_frame];
+        };
         Application.ThreadException += (_, e) => AddProblem($"Unexpected error: {e.Exception.Message}");
 
         foreach (string problem in migrationProblems.Concat(AppInitializer.Run(_settings, settingsLoadError)))
@@ -88,6 +104,7 @@ sealed class TrayApp : ApplicationContext, IAppHost
 
     public AppSettings Settings => _settings;
     public AnalysisRunner Runner => _runner;
+    public MediaDurations Durations => _durations;
     public IReadOnlyList<Project> Projects => _projects;
     public IReadOnlyList<string> Problems => _problems;
 
@@ -196,15 +213,24 @@ sealed class TrayApp : ApplicationContext, IAppHost
         else
             status = _projects.Count == 0 ? "No projects yet" : "All projects analysed";
 
-        _tray.Icon = (state, hasProblem) switch
+        _animation = state == State.Working ? (hasProblem ? TrayIcons.WorkingWarning : TrayIcons.Working) : null;
+        if (_animation != null)
         {
-            (State.Working, true) => TrayIcons.WorkingWarning,
-            (State.Working, false) => TrayIcons.Working,
-            (State.Waiting, true) => TrayIcons.WaitingWarning,
-            (State.Waiting, false) => TrayIcons.Waiting,
-            (_, true) => TrayIcons.Warning,
-            _ => TrayIcons.Idle,
-        };
+            // Keeps the current frame, so frequent refreshes during an analysis don't restart the wave.
+            _tray.Icon = _animation[_frame % _animation.Length];
+            _animationTimer.Enabled = true;
+        }
+        else
+        {
+            _animationTimer.Enabled = false;
+            _tray.Icon = (state, hasProblem) switch
+            {
+                (State.Waiting, true) => TrayIcons.WaitingWarning,
+                (State.Waiting, false) => TrayIcons.Waiting,
+                (_, true) => TrayIcons.Warning,
+                _ => TrayIcons.Idle,
+            };
+        }
         // NotifyIcon.Text throws above 127 characters.
         _tray.Text = Truncate("Media Analysis\n" + (hasProblem ? "NEEDS ATTENTION (open Status)\n" : "") + status, 127);
         Changed?.Invoke();
@@ -261,7 +287,9 @@ sealed class TrayApp : ApplicationContext, IAppHost
     private void ExitNow()
     {
         _runner.Dispose();
+        _durations.Dispose();
         _rescanTimer.Dispose();
+        _animationTimer.Dispose();
         _watcher?.Dispose();
         _watchDebounce?.Dispose();
         _exitWait.Unregister(null);
@@ -272,6 +300,18 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _tray.Dispose();
         _menu.Dispose();
         ExitThread();
+    }
+
+    /// <summary>The ffprobe the core uses (its ffmpeg folder in core.json), else one on the PATH.</summary>
+    private string? FindFfprobe()
+    {
+        if (CoreConfig.Load(AppContext.BaseDirectory, out _) is { } core
+            && core.Environment.TryGetValue("MEDIA_ANALYSIS_FFMPEG_DIR", out string? dir)
+            && File.Exists(Path.Combine(dir, "ffprobe.exe")))
+            return Path.Combine(dir, "ffprobe.exe");
+        return (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(d => Path.Combine(d.Trim('"'), "ffprobe.exe"))
+            .FirstOrDefault(File.Exists);
     }
 
     private void ShowBalloon(string title, string text, ToolTipIcon icon) =>

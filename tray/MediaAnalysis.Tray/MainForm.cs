@@ -24,6 +24,7 @@ sealed class MainForm : Form
 
     private readonly TextBox _projectsRoot = new() { Width = 520 };
     private readonly TextBox _outputRoot = new() { Width = 520 };
+    private readonly ComboBox _claudeProfile = new() { Width = 520, DropDownStyle = ComboBoxStyle.DropDown };
     private readonly ComboBox _whisperModel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly ComboBox _effort = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
@@ -175,7 +176,7 @@ sealed class MainForm : Form
             AllowUserToResizeRows = false,
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-            MultiSelect = false,
+            MultiSelect = true,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             BackgroundColor = SystemColors.Window,
             BorderStyle = BorderStyle.None,
@@ -193,6 +194,7 @@ sealed class MainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", FillWeight = 32, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Elapsed", FillWeight = 9, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Last analysed", FillWeight = 13, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Length", FillWeight = 9, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Files", FillWeight = 6, ReadOnly = true });
         foreach (DataGridViewColumn column in grid.Columns)
             column.SortMode = DataGridViewColumnSortMode.NotSortable;
@@ -210,8 +212,6 @@ sealed class MainForm : Form
             {
                 if (FindProject(path) is { ReportWrittenUtc: not null })
                     OpenReport(path);
-                else
-                    OpenFolder(path);
             }
         };
 
@@ -219,6 +219,12 @@ sealed class MainForm : Form
         menu.Opening += (_, e) =>
         {
             menu.Items.Clear();
+            List<Project> selected = SelectedProjects();
+            if (selected.Count > 1)
+            {
+                BuildSelectionMenu(menu.Items, selected);
+                return;
+            }
             if (grid.CurrentRow?.Tag is not string path || FindProject(path) is not { } project)
             {
                 e.Cancel = true;
@@ -228,7 +234,8 @@ sealed class MainForm : Form
         };
         grid.CellMouseDown += (_, e) =>
         {
-            if (e.Button == MouseButtons.Right && e.RowIndex >= 0)
+            // Right-clicking inside a multiple selection keeps it, so the menu acts on all of it.
+            if (e.Button == MouseButtons.Right && e.RowIndex >= 0 && !grid.Rows[e.RowIndex].Selected)
                 grid.CurrentCell = grid.Rows[e.RowIndex].Cells[0];
         };
         grid.KeyDown += (_, e) =>
@@ -239,13 +246,21 @@ sealed class MainForm : Form
                 menu.Show(grid, new Point(cell.Left + 20, cell.Bottom));
                 e.Handled = true;
             }
+            else if (e.KeyCode == Keys.Delete && !grid.IsCurrentCellInEditMode && SelectedProjects() is { Count: > 0 } selected)
+            {
+                DeleteProjects(selected);
+                e.Handled = true;
+            }
         };
         grid.ContextMenuStrip = menu;
         return grid;
     }
 
     private sealed record Row(string Path, string Name, string Folder, string Status, string Elapsed, string LastAnalysed,
-        string Files, Color StatusColor);
+        string Files, Color StatusColor)
+    {
+        public string Length { get; init; } = "";
+    }
 
     private void RefreshGrid()
     {
@@ -261,7 +276,7 @@ sealed class MainForm : Form
             if (search.Length > 0 && !p.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
                 && !_host.Settings.DisplayName(p.Path).Contains(search, StringComparison.OrdinalIgnoreCase))
                 continue;
-            Row row = Describe(p);
+            Row row = Describe(p) with { Length = _host.Durations.Describe(p) };
             bool show = filter switch
             {
                 Filter.NotAnalysed => p.State == ProjectState.NotAnalysed && !_host.Settings.IsIgnored(p.Path),
@@ -280,6 +295,7 @@ sealed class MainForm : Form
         if (!sameRows)
         {
             string? selected = _grid.CurrentRow?.Tag as string;
+            var selectedPaths = _grid.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Tag as string).ToHashSet();
             int scroll = Math.Max(0, _grid.FirstDisplayedScrollingRowIndex);
             _grid.Rows.Clear();
             foreach (var r in rows)
@@ -293,12 +309,15 @@ sealed class MainForm : Form
                 foreach (DataGridViewRow gridRow in _grid.Rows)
                     if ((string?)gridRow.Tag == selected)
                         _grid.CurrentCell = gridRow.Cells[0];
+            foreach (DataGridViewRow gridRow in _grid.Rows)
+                if (selectedPaths.Contains(gridRow.Tag as string))
+                    gridRow.Selected = true;
         }
         for (int i = 0; i < rows.Count; i++)
         {
             var r = rows[i];
             var cells = _grid.Rows[i].Cells;
-            object[] values = [r.Name, r.Folder, r.Status, r.Elapsed, r.LastAnalysed, r.Files];
+            object[] values = [r.Name, r.Folder, r.Status, r.Elapsed, r.LastAnalysed, r.Length, r.Files];
             for (int c = 0; c < values.Length; c++)
                 if (!Equals(cells[c].Value, values[c]))
                     cells[c].Value = values[c];
@@ -370,6 +389,11 @@ sealed class MainForm : Form
                 Enabled = !ignored && project.State != ProjectState.Empty && _host.Settings.OutputRoot != null,
                 Font = project.State == ProjectState.NotAnalysed && !ignored ? bold : _grid.Font,
             });
+        if (!running && !queued && project.OutputPath.Length > 0 && Directory.Exists(project.OutputPath))
+            items.Add(new ToolStripMenuItem("Analyse from scratch...", null, (_, _) => AnalyseFromScratch(project.Path))
+            {
+                Enabled = !ignored && project.State != ProjectState.Empty && _host.Settings.OutputRoot != null,
+            });
         items.Add("Rename", null, (_, _) => BeginRename());
         if (ignored)
             items.Add("Unignore", null, (_, _) => SetIgnored(project.Path, false));
@@ -392,6 +416,80 @@ sealed class MainForm : Form
             items.Add(new ToolStripSeparator());
             items.Add("Add the suggested template to my templates...", null, (_, _) => AddSuggestedTemplate(suggested));
         }
+
+        items.Add(new ToolStripSeparator());
+        items.Add(new ToolStripMenuItem("Delete project...", null, (_, _) => DeleteProjects([project])) { Enabled = !running && !queued });
+    }
+
+    /// <summary>Right-click menu of several selected projects.</summary>
+    private void BuildSelectionMenu(ToolStripItemCollection items, List<Project> selected)
+    {
+        int busy = selected.Count(p => _host.Runner.IsRunning(p.Path) || _host.Runner.IsQueued(p.Path));
+        items.Add(new ToolStripMenuItem($"Delete {selected.Count} projects...", null, (_, _) => DeleteProjects(selected))
+        {
+            Enabled = busy == 0,
+            ToolTipText = busy > 0 ? "Stop or unqueue the analyses of the selected projects first." : null,
+        });
+    }
+
+    private List<Project> SelectedProjects() =>
+        _grid.SelectedRows.Cast<DataGridViewRow>()
+            .Select(r => r.Tag is string path ? FindProject(path) : null)
+            .OfType<Project>()
+            .OrderBy(p => _grid.Rows.Cast<DataGridViewRow>().First(r => (string?)r.Tag == p.Path).Index)
+            .ToList();
+
+    /// <summary>Moves the projects' folders, and optionally their output folders, to the Recycle Bin after confirmation.</summary>
+    private void DeleteProjects(IReadOnlyList<Project> projects)
+    {
+        projects = projects.Where(p => !_host.Runner.IsRunning(p.Path) && !_host.Runner.IsQueued(p.Path)).ToList();
+        if (projects.Count == 0)
+            return;
+        bool hasOutput = projects.Any(HasOutput);
+        string names = string.Join("\n", projects.Take(10).Select(p => "  " + _host.Settings.DisplayName(p.Path)))
+            + (projects.Count > 10 ? $"\n  ...and {projects.Count - 10} more" : "");
+        var delete = new TaskDialogButton("Delete");
+        var page = new TaskDialogPage
+        {
+            Caption = "Media Analysis",
+            Heading = projects.Count == 1 ? $"Delete {_host.Settings.DisplayName(projects[0].Path)}?" : $"Delete {projects.Count} projects?",
+            Text = projects.Count == 1
+                ? $"The project folder and its recordings go to the Recycle Bin:\n{projects[0].Path}"
+                : $"The project folders and their recordings go to the Recycle Bin:\n{names}",
+            Icon = TaskDialogIcon.Warning,
+            Buttons = { delete, TaskDialogButton.Cancel },
+            DefaultButton = TaskDialogButton.Cancel,
+            Verification = !hasOutput ? null
+                : projects.Count == 1
+                    ? new TaskDialogVerificationCheckBox($"Also delete the report and its files ({projects[0].OutputPath})", isChecked: true)
+                    : new TaskDialogVerificationCheckBox("Also delete their reports and files (output folders)", isChecked: true),
+        };
+        if (TaskDialog.ShowDialog(this, page) != delete)
+            return;
+
+        bool withOutput = hasOutput && page.Verification!.Checked;
+        foreach (var project in projects)
+        {
+            var folders = new List<string> { project.Path };
+            if (withOutput && HasOutput(project))
+                folders.Add(project.OutputPath);
+            try
+            {
+                foreach (string folder in folders)
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(folder,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                _host.Settings.Forget(project.Path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
+            {
+                MessageBox.Show(this, $"{_host.Settings.DisplayName(project.Path)} could not be deleted: {ex.Message}\n\nThe remaining projects were left as they are.",
+                    "Media Analysis", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                break;
+            }
+        }
+        _host.SaveSettings(foldersChanged: false);
+
+        static bool HasOutput(Project p) => p.OutputPath.Length > 0 && Directory.Exists(p.OutputPath);
     }
 
     private Project? FindProject(string path) =>
@@ -409,6 +507,20 @@ sealed class MainForm : Form
     {
         if (FindProject(path) is { } project && _host.Settings.OutputRoot != null)
             _host.Runner.Enqueue(ProjectCatalog.Read(new DirectoryInfo(project.Path), _host.Settings.OutputRoot));
+        RefreshGrid();
+    }
+
+    private void AnalyseFromScratch(string path)
+    {
+        if (FindProject(path) is not { } project || _host.Settings.OutputRoot == null)
+            return;
+        if (MessageBox.Show(this,
+                "Clear everything kept from earlier analyses of this project (transcript, scan, Claude results) and analyse it "
+                + "again from the start?\n\nThis takes as long as a first analysis and uses Claude again. The current report "
+                + "stays until the new one replaces it.",
+                "Media Analysis", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+        _host.Runner.Enqueue(ProjectCatalog.Read(new DirectoryInfo(project.Path), _host.Settings.OutputRoot), fresh: true);
         RefreshGrid();
     }
 
@@ -458,8 +570,8 @@ sealed class MainForm : Form
 
     private void OpenReport(string path)
     {
-        if (FindProject(path) is { } p && File.Exists(p.ReportPath))
-            Process.Start(new ProcessStartInfo(p.ReportPath) { UseShellExecute = true });
+        if (FindProject(path) is { } p && ReportOpener.Open(p.ReportPath, _host.Settings.ClaudeProfileInUse()) is { } error)
+            MessageBox.Show(this, error, "Media Analysis", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void AddSuggestedTemplate(string suggested)
@@ -507,7 +619,7 @@ sealed class MainForm : Form
             if (note != null)
                 table.Controls.Add(new Label { Text = note, AutoSize = true, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 0, 0, 4) }, 1, table.RowCount++);
         }
-        Button Browse(TextBox target, string description)
+        Button Browse(Control target, string description)
         {
             var button = new Button { Text = "Browse...", AutoSize = true };
             button.Click += (_, _) =>
@@ -535,6 +647,10 @@ sealed class MainForm : Form
         Heading("Analysis");
         Field("Transcription model", _whisperModel, note: "Changing it transcribes projects again the next time they are analysed.");
         Field("Spoken language", _language);
+        Field("Claude profile", _claudeProfile, Browse(_claudeProfile, "Choose the Claude Code profile folder to sign in with"),
+            "The Claude Code profile (config folder) whose login and subscription analyses use; Open report starts VS Code with it too.\n"
+            + "The list shows the .claude* folders in your home folder that hold a login; you can also type or browse to another.\n"
+            + $"Empty = the default ({AppSettings.DefaultClaudeProfile}). Sign in once with that profile in Claude Code first.");
         Field("Claude thinking", _effort, note: "More thinking can give better reports but takes longer.");
         Field("Maximum key moments", _maxFrames, note: "How many moments may be captured as frames (0 = the default, 30).");
 
@@ -556,6 +672,10 @@ sealed class MainForm : Form
         var s = _host.Settings;
         _projectsRoot.Text = s.ProjectsRoot ?? "";
         _outputRoot.Text = s.OutputRoot ?? "";
+        _claudeProfile.Items.Clear();
+        foreach (string profile in AppSettings.FindClaudeProfiles())
+            _claudeProfile.Items.Add(profile);
+        _claudeProfile.Text = s.ClaudeProfile ?? "";
         _whisperModel.SelectedIndex = Math.Max(0, Array.FindIndex(WhisperModels, m => m.Value == s.WhisperModel));
         _language.SelectedIndex = Math.Max(0, Array.FindIndex(Languages, m => m.Value == s.Language));
         _effort.SelectedIndex = Math.Max(0, Array.FindIndex(Efforts, m => m.Value == s.Effort));
@@ -587,10 +707,24 @@ sealed class MainForm : Form
                 return;
             }
         }
+        string profile = _claudeProfile.Text.Trim();
+        if (profile.Length > 0)
+        {
+            if (!Directory.Exists(profile))
+            {
+                MessageBox.Show(this, $"The Claude profile folder doesn't exist:\n{profile}", "Media Analysis", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (!AppSettings.HasClaudeLogin(profile) && MessageBox.Show(this,
+                    $"No Claude login was found in {profile}.\nAnalyses will fail until you sign in with this profile in Claude Code.\n\nSave anyway?",
+                    "Media Analysis", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+        }
         var s = _host.Settings;
         bool foldersChanged = (s.ProjectsRoot ?? "") != projects || (s.OutputRoot ?? "") != output;
         s.ProjectsRoot = projects.Length > 0 ? projects : null;
         s.OutputRoot = output.Length > 0 ? output : null;
+        s.ClaudeProfile = profile.Length > 0 ? profile : null;
         s.WhisperModel = WhisperModels[_whisperModel.SelectedIndex].Value;
         s.Language = Languages[_language.SelectedIndex].Value;
         s.Effort = Efforts[_effort.SelectedIndex].Value;
@@ -726,6 +860,7 @@ sealed class MainForm : Form
             ("Installed in", AppContext.BaseDirectory.TrimEnd('\\')),
             ("Analysis engine", core != null ? core.Python : "not available (run deploy.cmd to repair)"),
             ("Data", AppPaths.Data),
+            ("Run statistics", Path.Combine(AppPaths.Data, "stats", "runs.jsonl")),
         ];
         _about.SuspendLayout();
         _about.Controls.Clear();

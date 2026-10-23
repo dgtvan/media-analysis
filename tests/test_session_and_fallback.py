@@ -5,6 +5,7 @@ from media_analysis.core.models import (
     TranscriptSegment, VisualScan,
 )
 from media_analysis.core.perf import StageTimer
+from media_analysis.providers.llm import Usage
 from media_analysis.core.pipeline import Pipeline, _label_speakers
 from media_analysis.config import Settings
 from media_analysis.events import Event, EventKind
@@ -119,4 +120,75 @@ def test_summary_lists_each_stage_with_its_result():
     assert stages == {"transcribe": "ran", "scan": "cached", "report": "failed"}
     assert summary.data["failed"] and summary.data["claude_calls"] == 1
     assert "Performance" in summary.message and "report" in summary.message
-    assert len(events) == 4
+    assert len(events) == 5 and events[-1].kind == EventKind.INFO and "tokens not reported" in events[-1].message
+
+
+def test_claude_tokens_are_logged_per_call_and_summed_per_stage():
+    events = []
+    timer = StageTimer(events.append)
+    timer(Event(EventKind.STAGE_STARTED, "classify"))
+    timer.add_claude_call(2.0, Usage.from_api({"input_tokens": 100, "cache_read_input_tokens": 900, "output_tokens": 50}, 0.01))
+    timer(Event(EventKind.STAGE_DONE, "classify"))
+    timer(Event(EventKind.STAGE_STARTED, "report"))
+    timer.add_claude_call(5.0, Usage.from_api({"input_tokens": 2000, "cache_creation_input_tokens": 500, "output_tokens": 3000}, 0.2))
+    timer.add_claude_call(4.0, Usage.from_api({"input_tokens": 1000, "output_tokens": 1000}, 0.1))
+    timer(Event(EventKind.STAGE_DONE, "report"))
+
+    calls = [e for e in events if e.kind == EventKind.INFO]
+    assert calls[0].stage == "classify"
+    assert calls[0].message == "Claude call 1: 00:00:02, 1,000 tokens in (900 from cache), 50 out, ~$0.01 at API rates"
+    assert calls[1].data["claude_call"]["cache_write_tokens"] == 500
+
+    summary = timer.summary(failed=False)
+    by_stage = {s["stage"]: s for s in summary.data["stages"]}
+    assert by_stage["report"]["claude_calls"] == 2
+    assert by_stage["report"]["claude_usage"]["output_tokens"] == 4000
+    assert summary.data["claude_usage"]["input_tokens"] == 3100
+    assert abs(summary.data["claude_usage"]["cost_usd"] - 0.31) < 1e-9
+    assert "Claude: 3 call(s)" in summary.message
+    assert "report      2 calls" in summary.message and "4,500 tokens in" in summary.message
+
+
+def test_every_run_appends_one_json_line_for_statistics(tmp_path):
+    import json
+
+    import pytest
+
+    from media_analysis.core.pipeline import RunOptions
+    from media_analysis.errors import MediaAnalysisError
+
+    stats = tmp_path / "stats" / "runs.jsonl"
+    settings = Settings(stats_file=stats)
+    for _ in range(2):
+        with pytest.raises(MediaAnalysisError):
+            Pipeline(settings).run(RunOptions(input_dir=tmp_path / "missing", output_dir=tmp_path / "out",
+                                              project_name="Weekly call", log_file=tmp_path / "run.log", fresh=True))
+
+    records = [json.loads(line) for line in stats.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 2 and records[0]["run_id"] != records[1]["run_id"]
+    r = records[0]
+    assert r["schema"] == 1 and r["outcome"] == "failed" and r["error"]
+    assert r["project"]["name"] == "missing" and r["project"]["display_name"] == "Weekly call"
+    assert r["fresh"] is True and r["force_from"] is None
+    assert r["log_file"] == str(tmp_path / "run.log") and r["media"]["files"] == [] and r["template"] is None
+    assert r["claude"]["calls"] == 0 and isinstance(r["stages"], list) and r["settings"]["backend"] == "subscription"
+
+
+def test_fresh_run_clears_the_cache_of_earlier_runs(tmp_path):
+    import pytest
+
+    from media_analysis.core.pipeline import CACHE_DIR_NAME, RunOptions
+    from media_analysis.errors import MediaAnalysisError
+
+    (tmp_path / "in").mkdir()
+    marker = tmp_path / "out" / CACHE_DIR_NAME / "transcript.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}")
+    settings = Settings(stats_file=None)
+
+    with pytest.raises(MediaAnalysisError):  # no media in the input folder
+        Pipeline(settings).run(RunOptions(input_dir=tmp_path / "in", output_dir=tmp_path / "out"))
+    assert marker.exists()
+    with pytest.raises(MediaAnalysisError):
+        Pipeline(settings).run(RunOptions(input_dir=tmp_path / "in", output_dir=tmp_path / "out", fresh=True))
+    assert not marker.exists()

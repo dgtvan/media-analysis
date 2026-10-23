@@ -33,7 +33,8 @@ sealed class AnalysisRunner : IDisposable
     private readonly Func<CoreConfig?> _core;
     private readonly Func<IEnumerable<string>> _options;
     private readonly RunHistory _history;
-    private readonly List<(string Path, string Name, string Output)> _queue = [];
+    private readonly Func<string, string> _displayName;
+    private readonly List<(string Path, string Name, string Output, bool Fresh)> _queue = [];
     private Process? _process;
 
     /// <summary>Something changed: queue, progress or a result.</summary>
@@ -44,12 +45,15 @@ sealed class AnalysisRunner : IDisposable
 
     /// <param name="core">How to start the core; null when it isn't available.</param>
     /// <param name="options">Core options from the settings, read when each analysis starts.</param>
-    public AnalysisRunner(SynchronizationContext ui, Func<CoreConfig?> core, Func<IEnumerable<string>> options, RunHistory history)
+    /// <param name="displayName">The user's name for a project folder, recorded in the run statistics.</param>
+    public AnalysisRunner(SynchronizationContext ui, Func<CoreConfig?> core, Func<IEnumerable<string>> options, RunHistory history,
+        Func<string, string>? displayName = null)
     {
         _ui = ui;
         _core = core;
         _options = options;
         _history = history;
+        _displayName = displayName ?? Path.GetFileName;
     }
 
     public ActiveRun? Current { get; private set; }
@@ -69,11 +73,12 @@ sealed class AnalysisRunner : IDisposable
     public RunResult? LastResult(string projectPath) => _history.Get(projectPath);
 
     /// <summary>Queues a project; it starts right away when nothing else runs.</summary>
-    public void Enqueue(Project project)
+    /// <param name="fresh">Clear the project's cached work first, so every step runs again (the core's <c>--fresh</c>).</param>
+    public void Enqueue(Project project, bool fresh = false)
     {
         if (IsRunning(project.Path) || IsQueued(project.Path) || project.OutputPath.Length == 0)
             return;
-        _queue.Add((project.Path, project.Name, project.OutputPath));
+        _queue.Add((project.Path, project.Name, project.OutputPath, fresh));
         StartNext();
         Changed?.Invoke();
     }
@@ -106,7 +111,7 @@ sealed class AnalysisRunner : IDisposable
     {
         if (Current != null || _queue.Count == 0)
             return;
-        var (path, name, output) = _queue[0];
+        var (path, name, output, fresh) = _queue[0];
         _queue.RemoveAt(0);
 
         string logPath = Path.Combine(AppPaths.Logs, $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss}_{Sanitize(name)}.log");
@@ -119,11 +124,14 @@ sealed class AnalysisRunner : IDisposable
             Directory.CreateDirectory(AppPaths.Logs);
             log = new StreamWriter(new FileStream(logPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
             List<string> options = [.. _options()];
+            if (fresh)
+                options.Add("--fresh");
             log.WriteLine($"# Project:  {path}");
             log.WriteLine($"# Output:   {output}");
             log.WriteLine($"# Started:  {run.StartedAt:yyyy-MM-dd HH:mm:ss}");
             log.WriteLine($"# Build:    {BuildInfo.Built}");
             log.WriteLine($"# Options:  {(options.Count > 0 ? string.Join(' ', options) : "(defaults)")}");
+            log.WriteLine($"# Claude:   {ClaudeProfile(options)}");
 
             CoreConfig? core = _core();
             if (core == null)
@@ -134,7 +142,9 @@ sealed class AnalysisRunner : IDisposable
                 return;
             }
 
-            var process = new Process { StartInfo = core.RunCommand(path, output, options), EnableRaisingEvents = true };
+            // Recorded in the run statistics, so a record leads back to this log and the name shown in the app.
+            List<string> runOptions = [.. options, "--log-file", logPath, "--project-name", _displayName(path)];
+            var process = new Process { StartInfo = core.RunCommand(path, output, runOptions), EnableRaisingEvents = true };
             var stderr = new List<string>();
             process.OutputDataReceived += (_, e) => OnOutput(run, log, e.Data);
             process.ErrorDataReceived += (_, e) =>
@@ -248,6 +258,13 @@ sealed class AnalysisRunner : IDisposable
         _queue.Clear();
         Kill();
         _process?.Dispose();
+    }
+
+    /// <summary>The Claude Code profile the core signs in with (its <c>--claude-profile</c>).</summary>
+    internal static string ClaudeProfile(IReadOnlyList<string> options)
+    {
+        int i = options.ToList().IndexOf("--claude-profile");
+        return i >= 0 && i + 1 < options.Count ? options[i + 1] : "(not set)";
     }
 
     private static bool SamePath(string a, string b) =>

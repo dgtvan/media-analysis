@@ -25,7 +25,7 @@ template), picks the moments where the picture matters, and writes a report that
 6. **Read** with Claude: keep only useful frames and read their text.
 7. **Report** with Claude, following the template; then assemble the output folder.
 
-See [docs/PLAN.md](docs/PLAN.md) for the design.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works.
 
 ## Requirements
 
@@ -52,17 +52,27 @@ subfolder is a project (one recording session). Each project's report goes to `<
   itself is never renamed and reports stay in `<output folder>\<folder name>`; clear the name to go back to the folder
   name), its folder, a plain-language status (*Transcribing audio… 45%*, *Writing the report…*,
   *Done*, *Failed: …*, *Stopped by you*, *Not analysed*, *Ignored*), the elapsed time (live while running; the last
-  run's time otherwise), when it was last analysed, and the number of media files. Right-click a project for its
-  actions (*Analyse* / *Analyse again*, *Stop analysis* or *Remove from queue*, *Ignore* / *Unignore*), then what to
+  run's time otherwise), when it was last analysed, the recording length (total of the videos, or of the audio when there is no
+  video; Meeting Recorder's microphone and system audio count once), and the number of media files. Right-click a project for its
+  actions (*Analyse* / *Analyse again*, *Analyse from scratch...* (clears everything kept from earlier runs and redoes
+  every step), *Stop analysis* or *Remove from queue*, *Ignore* / *Unignore*), then what to
   open (*View logs*, *Open report*, *Open project folder*, *Open output folder*) and, after a general report, *Add the
-  suggested template*. Double-click opens the report (or the project folder). One analysis runs at a time; others
+  suggested template*; last, *Delete project...*, which moves the project folder (and, unless you untick it, its
+  output folder) to the Recycle Bin. Select several projects (Ctrl/Shift-click) to delete them together from the
+  right-click menu or with the Delete key. Double-click opens the report, if there is one. One analysis runs at a time; others
   queue. Stopping is cheap: analysing again continues from the cache. An ignored project no longer counts as waiting
   and is never started automatically. Filter, search, and *Analyse all not analysed* sit above the grid.
 - **Logs**: each analysis is logged from its first line to `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\logs`, ending with a
-  performance summary (time per step, cached or not, transcription speed, Claude calls). The log window follows a
-  running analysis live and has a readable and a full view.
+  performance summary (time per step, cached or not, transcription speed, Claude calls and tokens per step). Each
+  Claude call is logged with its time and tokens (input, from cache, output, and the cost at API rates as reported by
+  Claude Code; with the subscription that cost is only an estimate). The log window follows a running analysis live
+  and has a readable and a full view.
+- **Run statistics**: every analysis that finishes or fails appends one JSON line to
+  `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\stats\runs.jsonl` (see [Run statistics](#run-statistics)). An analysis
+  you stop isn't recorded.
 - **Config tab**: projects and output folders, *Analyse new projects automatically*, transcription model, spoken
-  language, Claude thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\settings.json`).
+  language, Claude profile (which Claude Code login and subscription analyses use; logged in each analysis), Claude
+  thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\settings.json`).
 - **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\VanDang\MediaAnalysis\data\templates`), with *New*, *Open* and
   *Copy to my templates*.
 - **Automatic analysis** (off by default): projects added after you turn it on are queued once their files have
@@ -113,8 +123,10 @@ Useful options:
 | `--max-frames <n>` | Maximum moments to capture (default 30) |
 | `--claude-model <id>` | Claude model (default: your account's default model, as in Claude Code) |
 | `--effort <level>` | Claude thinking effort: `low`, `medium`, `high`, `xhigh`, `max` (default: the model's default) |
+| `--claude-profile <dir>` | Claude Code config folder whose login to use, e.g. `~/.claude-work` (default: Claude Code's default, `~/.claude`) |
 | `--json` | Print progress as JSON Lines on stdout (for scripts and other programs) |
 | `--clean-cache` | Delete `.cache/` after a successful run |
+| `--fresh` | Delete `.cache/` from earlier runs first, so every stage runs again (the app's *Analyse from scratch*) |
 
 ## Following progress
 
@@ -124,7 +136,7 @@ extraction, and what Claude is doing during the Claude steps (`thinking`, `writi
 Programs can follow a run in two ways:
 
 - **CLI:** `--json` prints one JSON object per line: `stage_started`, `progress` (`completed`/`total`), `activity`,
-  `warning`, `stage_done` / `stage_skipped`, `summary` (time per stage; also after a failure), and finally
+  `warning`, `stage_done` / `stage_skipped`, `summary` (time and Claude tokens per stage; also after a failure), and finally
   `finished` (with `generic: true` when no template fit) or `error`.
 - **Python:** pass a callback that receives `Event` objects:
 
@@ -137,6 +149,35 @@ Programs can follow a run in two ways:
 
 Rough timing on CPU: about 1.2× the audio length with large-v3, 0.8× with large-v3-turbo; the Claude steps add a few
 minutes.
+
+## Run statistics
+
+Each run appends one JSON object per line to `<data folder>/stats/runs.jsonl` (the app's data folder; set
+`MEDIA_ANALYSIS_HOME` to change it), also from the command line. Fields (`schema` 1):
+
+| Field | Meaning |
+|---|---|
+| `run_id`, `started`, `finished` | Unique id; UTC times |
+| `outcome`, `error` | `succeeded` or `failed`, and the error message |
+| `app_version` | Core version |
+| `project` | `name` (folder), `display_name` (the name in the app), `input_dir`, `output_dir` |
+| `fresh`, `force_from` | Whether the run started from scratch (`--fresh`), or the stage `--force` redid from |
+| `log_file` | The run's log (the app's log for this analysis; null from the command line unless `--log-file` is given) |
+| `media` | `files` (name, `fingerprint`, seconds, has_video, has_audio, speaker), `video_seconds`, `audio_seconds`. The fingerprint (size + first and last 8 MB) identifies a file even after it is moved or renamed |
+| `template` | `id`, `generic`, `forced`, `confidence` (null when the run failed before classifying) |
+| `evidence_count` | Moments captured (null on failure) |
+| `settings` | backend, model, effort, claude_profile, whisper_model, device, language, max_frames |
+| `total_seconds`, `transcribe_speed` | Run time; audio seconds per second of transcription |
+| `claude` | `calls`, `seconds`, `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `cost_usd` |
+| `stages` | Per stage: `stage`, `result` (ran/cached/skipped/failed), `seconds`, `message`, `claude_calls`, `claude_usage` |
+
+```python
+import os
+import pandas as pd
+
+runs = pd.read_json(os.path.expandvars(r"%LOCALAPPDATA%\VanDang\MediaAnalysis\data\stats\runs.jsonl"), lines=True)
+stages = pd.json_normalize(runs.to_dict("records"), "stages", ["run_id", ["project", "name"]])
+```
 
 ## Templates
 

@@ -9,13 +9,14 @@ from __future__ import annotations
 import shutil
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from media_analysis.config import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, Settings
 from media_analysis.core import prompts
 from media_analysis.core.assemble import assemble_output
 from media_analysis.core.cache import Cache, digest, file_fingerprint
-from media_analysis.core.perf import StageTimer
+from media_analysis.core.perf import StageTimer, append_run_record, run_record
 from media_analysis.core.models import (
     Candidates,
     Classification,
@@ -55,6 +56,12 @@ class RunOptions:
     template_id: str | None = None
     force_from: str | None = None
     clean_cache: bool = False
+    fresh: bool = False
+    """Delete the cache of earlier runs first, so every stage runs again."""
+    project_name: str | None = None
+    """The name the user gave the project, when it differs from its folder name (run statistics only)."""
+    log_file: Path | None = None
+    """Where the caller logs this run (run statistics only)."""
 
 
 @dataclass
@@ -71,11 +78,15 @@ class Pipeline:
         self.timer = StageTimer(sink)
         self.sink = self.timer
         self._llm: LLM | None = None
+        self._ingest: Ingest | None = None
+        self._classification: Classification | None = None
 
     @property
     def llm(self) -> LLM:
         if self._llm is None:
-            inner = create_llm(self.settings.llm.backend, self.settings.llm.model, self.settings.llm.effort)
+            inner = create_llm(
+                self.settings.llm.backend, self.settings.llm.model, self.settings.llm.effort, self.settings.llm.claude_profile
+            )
             self._llm = _TimedLLM(inner, self.timer)
         return self._llm
 
@@ -83,14 +94,37 @@ class Pipeline:
         return force_from is not None and STAGES.index(stage) >= STAGES.index(force_from)
 
     def run(self, opts: RunOptions) -> RunResult:
-        """Runs every stage; always ends with a summary event of how long each stage took, also on failure."""
-        failed = True
+        """Runs every stage; always ends with a summary event of how long each stage took, also on failure, and
+        appends the run to the stats file."""
+        started = datetime.now(timezone.utc)
+        failed, error, result = True, None, None
         try:
             result = self._run(opts)
             failed = False
             return result
+        except BaseException as e:
+            error = str(e) or type(e).__name__
+            raise
         finally:
-            self.sink(self.timer.summary(failed))
+            summary = self.timer.summary(failed)
+            self.sink(summary)
+            self._record(opts, started, summary, result, error)
+
+    def _record(self, opts: RunOptions, started: datetime, summary, result: RunResult | None, error: str | None) -> None:
+        path = self.settings.stats_file
+        if path is None:
+            return
+        try:
+            record = run_record(
+                started=started, input_dir=opts.input_dir.resolve(), output_dir=opts.output_dir.resolve(),
+                summary=summary, settings=self.settings, files=self._ingest.files if self._ingest else [],
+                classification=self._classification, evidence_count=result.evidence_count if result else None,
+                error=error, project_name=opts.project_name, log_file=opts.log_file, fresh=opts.fresh,
+                force_from=opts.force_from,
+            )
+            append_run_record(path, record)
+        except OSError as e:
+            Reporter(self.sink, "summary").warning(f"Could not record the run statistics in {path}: {e}")
 
     def _run(self, opts: RunOptions) -> RunResult:
         input_dir, output_dir = opts.input_dir.resolve(), opts.output_dir.resolve()
@@ -101,14 +135,16 @@ class Pipeline:
                 f"Unknown template '{opts.template_id}'. Available: {', '.join(sorted(templates))}."
             )
         output_dir.mkdir(parents=True, exist_ok=True)
+        if opts.fresh:
+            shutil.rmtree(output_dir / CACHE_DIR_NAME, ignore_errors=True)
         cache = Cache(output_dir / CACHE_DIR_NAME)
         force = opts.force_from
 
-        ingest = self.ingest(input_dir)
+        ingest = self._ingest = self.ingest(input_dir)
         self.timer.audio_seconds = sum(f.duration for f in ingest.files if f.has_audio)
         transcript = self.transcribe(ingest, cache, self._forced("transcribe", force))
         scan = self.scan(ingest, cache, self._forced("scan", force))
-        classification = self.classify(
+        classification = self._classification = self.classify(
             ingest, transcript, scan, templates, opts.template_id, cache, self._forced("classify", force)
         )
         template = templates[classification.template_id]  # type: ignore[index]
@@ -520,27 +556,29 @@ class Pipeline:
 
 
 class _TimedLLM:
-    """Passes calls through to the real client and records how long each took."""
+    """Passes calls through to the real client and records how long each took and the tokens it used."""
 
     def __init__(self, inner: LLM, timer: StageTimer) -> None:
         self._inner = inner
         self._timer = timer
         self.model = inner.model
         self.effort = inner.effort
+        self.last_usage = None
+
+    def _call(self, fn):
+        started = time.monotonic()
+        self._inner.last_usage = None
+        try:
+            return fn()
+        finally:
+            self.last_usage = self._inner.last_usage
+            self._timer.add_claude_call(time.monotonic() - started, self.last_usage)
 
     def generate_json(self, system, content, schema, on_activity=None):
-        started = time.monotonic()
-        try:
-            return self._inner.generate_json(system, content, schema, on_activity)
-        finally:
-            self._timer.add_claude_call(time.monotonic() - started)
+        return self._call(lambda: self._inner.generate_json(system, content, schema, on_activity))
 
     def generate_text(self, system, content, on_activity=None):
-        started = time.monotonic()
-        try:
-            return self._inner.generate_text(system, content, on_activity)
-        finally:
-            self._timer.add_claude_call(time.monotonic() - started)
+        return self._call(lambda: self._inner.generate_text(system, content, on_activity))
 
 
 # Meeting Recorder saves one folder per recording: video.mp4 (screen, no sound), audio-mic.wav (the person

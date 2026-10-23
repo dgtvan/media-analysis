@@ -55,9 +55,38 @@ public sealed class GuiModelTests : IDisposable
     [Fact]
     public void Settings_become_core_options()
     {
-        Assert.Empty(new AppSettings().CoreArguments());
-        var s = new AppSettings { WhisperModel = "large-v3-turbo", Language = "vi", Effort = "low", MaxFrames = 10 };
-        Assert.Equal(["--whisper-model", "large-v3-turbo", "--language", "vi", "--effort", "low", "--max-frames", "10"], s.CoreArguments());
+        Assert.Equal(["--claude-profile", AppSettings.DefaultClaudeProfile], new AppSettings().CoreArguments());
+        var s = new AppSettings { WhisperModel = "large-v3-turbo", Language = "vi", Effort = "low", MaxFrames = 10, ClaudeProfile = @"C:\p" };
+        Assert.Equal(["--whisper-model", "large-v3-turbo", "--language", "vi", "--effort", "low", "--claude-profile", @"C:\p", "--max-frames", "10"],
+            s.CoreArguments());
+    }
+
+    [Fact]
+    public void Claude_profile_is_always_explicit_and_logged()
+    {
+        var s = new AppSettings { ClaudeProfile = @"C:\Users\me\.claude-work" };
+        Assert.Equal(@"C:\Users\me\.claude-work", AnalysisRunner.ClaudeProfile(s.CoreArguments()));
+        Assert.Equal(AppSettings.DefaultClaudeProfile, AnalysisRunner.ClaudeProfile(new AppSettings().CoreArguments()));
+    }
+
+    [Fact]
+    public void Only_claude_folders_with_a_login_are_offered_as_profiles()
+    {
+        foreach (string name in new[] { ".claude", ".claude-work", ".claude-empty", "other" })
+            Directory.CreateDirectory(Path.Combine(_dir, name));
+        foreach (string name in new[] { ".claude", ".claude-work", "other" })
+            File.WriteAllText(Path.Combine(_dir, name, ".credentials.json"), "{}");
+
+        Assert.Equal([Path.Combine(_dir, ".claude"), Path.Combine(_dir, ".claude-work")], AppSettings.FindClaudeProfiles(_dir));
+    }
+
+    [Fact]
+    public void Reports_open_in_a_new_vs_code_window_with_the_claude_profile()
+    {
+        var info = ReportOpener.VsCodeCommand(@"C:\VS Code\bin\code.cmd", @"D:\Out\Call 1\report.md", @"C:\Users\me\.claude-work");
+        Assert.Equal(["--new-window", @"D:\Out\Call 1", @"D:\Out\Call 1\report.md"], info.ArgumentList);
+        Assert.Equal(@"C:\Users\me\.claude-work", info.Environment["CLAUDE_CONFIG_DIR"]);
+        Assert.False(info.UseShellExecute);
     }
 
     [Fact]
@@ -95,5 +124,62 @@ public sealed class GuiModelTests : IDisposable
         Assert.Empty(settings.ProjectNames);
         settings.SetDisplayName(project, "2026-10-23_09-00-12-Teams");
         Assert.Empty(settings.ProjectNames);
+    }
+
+    [Fact]
+    public void A_deleted_project_is_forgotten()
+    {
+        var settings = new AppSettings();
+        string project = Path.Combine(_dir, "call");
+        settings.SetDisplayName(project, "Call");
+        settings.SetIgnored(project, true);
+
+        settings.Forget(project);
+
+        Assert.Empty(settings.ProjectNames);
+        Assert.False(settings.IsIgnored(project));
+    }
+
+    [Fact]
+    public void Project_length_counts_video_or_else_audio()
+    {
+        var lengths = new Dictionary<string, TimeSpan?>
+        {
+            ["video.mp4"] = TimeSpan.FromMinutes(62.05), ["audio-mic.wav"] = TimeSpan.FromMinutes(62), ["a.mp3"] = TimeSpan.FromSeconds(95),
+            ["b.mp3"] = TimeSpan.FromSeconds(30), ["bad.mp3"] = null, ["audio-system.m4a"] = TimeSpan.FromMinutes(61),
+        };
+        using var durations = new MediaDurations(path => lengths[Path.GetFileName(path)]);
+        Project Make(params string[] names) => new("p", _dir, default, names.Length, "", null, ProjectState.NotAnalysed,
+            MediaFiles: names.Select(n => new MediaFile(Path.Combine(_dir, n), 1, default, n.EndsWith(".mp4"))).ToList());
+
+        var meeting = Make("video.mp4", "audio-mic.wav");
+        var audio = Make("a.mp3", "b.mp3");
+        var broken = Make("bad.mp3");
+        var audioSession = Make("audio-mic.wav", "audio-system.m4a");
+        Assert.Equal("measuring...", durations.Describe(meeting));
+        durations.Describe(audio);
+        durations.Describe(broken);
+        durations.Describe(audioSession);
+        SpinWait.SpinUntil(() => durations.Describe(meeting) != "measuring..." && durations.Describe(audio) != "measuring..."
+            && durations.Describe(broken) != "measuring..." && durations.Describe(audioSession) != "measuring...", 5000);
+
+        Assert.Equal("1:02:03", durations.Describe(meeting));
+        Assert.Equal("2:05", durations.Describe(audio));
+        Assert.Equal("?", durations.Describe(broken));
+        Assert.Equal("1:02:00", durations.Describe(audioSession));
+        Assert.Equal("", durations.Describe(Make()));
+        Assert.Equal(TimeSpan.FromSeconds(3), MediaDurations.ParseSeconds("2.6\r\n"));
+        Assert.Null(MediaDurations.ParseSeconds("N/A"));
+    }
+
+    [Fact]
+    public void Working_wave_moves_right_to_left()
+    {
+        var frames = Enumerable.Range(0, TrayIcons.FrameCount).Select(f => TrayIcons.WaveHeights(f)).ToList();
+        Assert.All(frames.SelectMany(h => h), h => Assert.InRange(h, 0.25f, 1f));
+        Assert.Equal(TrayIcons.FrameCount, frames.Select(h => string.Join(",", h.Select(x => x.ToString("F3")))).Distinct().Count());
+        // Three frames later each bar shows about what the bar to its right showed: the wave moved one bar left.
+        for (int i = 0; i < 4; i++)
+            Assert.InRange(frames[3][i] - frames[0][i + 1], -0.05f, 0.05f);
     }
 }

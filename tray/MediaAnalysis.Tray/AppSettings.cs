@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace MediaAnalysis.Tray;
 
 /// <summary>
-/// User choices persisted between runs in %LOCALAPPDATA%\MediaAnalysis\data\settings.json.
+/// User choices persisted between runs in settings.json in the data folder.
 /// </summary>
 sealed class AppSettings
 {
@@ -54,6 +54,13 @@ sealed class AppSettings
             ProjectNames[key] = name;
     }
 
+    /// <summary>Drops what the settings remember about a deleted project (ignored flag, name).</summary>
+    public void Forget(string projectPath)
+    {
+        SetIgnored(projectPath, false);
+        ProjectNames.Remove(Normalize(projectPath));
+    }
+
     private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd('\\');
 
     /// <summary>Transcription model (core's <c>--whisper-model</c>); null = the core's default.</summary>
@@ -64,6 +71,47 @@ sealed class AppSettings
 
     /// <summary>Claude thinking effort (<c>--effort</c>); null = the model's default.</summary>
     public string? Effort { get; set; }
+
+    /// <summary>
+    /// Claude Code config folder (CLAUDE_CONFIG_DIR) whose login analyses use (<c>--claude-profile</c>);
+    /// null = Claude Code's default.
+    /// </summary>
+    public string? ClaudeProfile { get; set; }
+
+    /// <summary>
+    /// The profile used when none is chosen: the account's own CLAUDE_CONFIG_DIR as saved in Windows, else
+    /// %USERPROFILE%\.claude. A value inherited from whatever started the app is ignored on purpose, so the default
+    /// doesn't depend on who launched it.
+    /// </summary>
+    public static string DefaultClaudeProfile =>
+        System.Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR", EnvironmentVariableTarget.User) is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile), ".claude");
+
+    /// <summary>The profile analyses and opened reports use: the chosen one, else <see cref="DefaultClaudeProfile"/>.</summary>
+    public string ClaudeProfileInUse() => string.IsNullOrEmpty(ClaudeProfile) ? DefaultClaudeProfile : ClaudeProfile;
+
+    /// <summary>True when <paramref name="profile"/> holds a Claude Code login.</summary>
+    public static bool HasClaudeLogin(string profile) =>
+        File.Exists(Path.Combine(profile, ".credentials.json"))
+        || !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN"));
+
+    /// <summary>Claude Code profiles in the user's home folder: <c>.claude*</c> folders that hold a login.</summary>
+    public static List<string> FindClaudeProfiles(string? home = null)
+    {
+        home ??= System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile);
+        try
+        {
+            return Directory.GetDirectories(home, ".claude*")
+                .Where(d => File.Exists(Path.Combine(d, ".credentials.json")))
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
 
     /// <summary>Maximum moments to capture as evidence (<c>--max-frames</c>); null = the core's default.</summary>
     public int? MaxFrames { get; set; }
@@ -78,6 +126,8 @@ sealed class AppSettings
             args.AddRange(["--language", Language]);
         if (!string.IsNullOrEmpty(Effort))
             args.AddRange(["--effort", Effort]);
+        // Always explicit, so the core never falls back to a CLAUDE_CONFIG_DIR the app happened to inherit.
+        args.AddRange(["--claude-profile", ClaudeProfileInUse()]);
         if (MaxFrames is { } frames)
             args.AddRange(["--max-frames", frames.ToString()]);
         return args;

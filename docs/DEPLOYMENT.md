@@ -32,8 +32,8 @@ and follows its JSON progress. The same core is available on the command line as
                                          models\ (only if the shared model folder isn't writable)
     dependencies\envs\<id>\              the core's libraries for one uv.lock; files are hardlinks into uv-cache
 
-%USERPROFILE%\.claude\                   Claude login (sign in once with Claude Code); analyses don't add session
-                                         history there (Claude Code runs with --no-session-persistence)
+%USERPROFILE%\.claude\                   Claude login (sign in once with Claude Code), or the profile folder chosen in
+                                         Config; analyses don't add session history there (--no-session-persistence)
 ```
 
 The environment id is a hash of the Python version and the locked requirements, so builds that don't change

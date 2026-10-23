@@ -36,6 +36,57 @@ Activity = Callable[[str], None]
 """Receives short live status lines during a call, such as "thinking" or "writing, 1,240 chars"."""
 
 
+@dataclass
+class Usage:
+    """Tokens used by one or more Claude calls.
+
+    `cost_usd` is the price Claude Code reports for the calls at API rates; with the subscription it is only an
+    estimate (calls aren't billed per token). The API backend doesn't report one.
+    """
+
+    input_tokens: int = 0
+    """Input that wasn't read from or written to the prompt cache."""
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float | None = None
+
+    @classmethod
+    def from_api(cls, usage: Any, cost_usd: float | None = None) -> Usage:
+        """From an Anthropic `usage` object or dict (the Agent SDK passes a dict)."""
+        def get(name: str) -> int:
+            value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+            return int(value or 0)
+        return cls(get("input_tokens"), get("cache_read_input_tokens"), get("cache_creation_input_tokens"),
+                   get("output_tokens"), cost_usd)
+
+    def __add__(self, other: Usage) -> Usage:
+        cost = None if self.cost_usd is None and other.cost_usd is None else (self.cost_usd or 0) + (other.cost_usd or 0)
+        return Usage(self.input_tokens + other.input_tokens, self.cache_read_tokens + other.cache_read_tokens,
+                     self.cache_write_tokens + other.cache_write_tokens, self.output_tokens + other.output_tokens, cost)
+
+    @property
+    def total_input(self) -> int:
+        return self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+    def describe(self) -> str:
+        """E.g. "12,345 tokens in (10,000 from cache), 1,234 out, ~$0.05 at API rates"."""
+        text = f"{self.total_input:,} tokens in"
+        if self.cache_read_tokens:
+            text += f" ({self.cache_read_tokens:,} from cache)"
+        text += f", {self.output_tokens:,} out"
+        if self.cost_usd is not None:
+            text += f", ~${self.cost_usd:.2f} at API rates"
+        return text
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input_tokens": self.input_tokens, "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens, "output_tokens": self.output_tokens,
+            "cost_usd": round(self.cost_usd, 4) if self.cost_usd is not None else None,
+        }
+
+
 def _media_type(path: Path) -> str:
     return {".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}.get(path.suffix.lower(), "image/jpeg")
 
@@ -58,6 +109,8 @@ class TransientLLMError(MediaAnalysisError):
 class LLM(Protocol):
     model: str | None
     effort: str | None
+    last_usage: Usage | None
+    """Tokens of the last successful call; None when the backend didn't report them."""
 
     def generate_json(
         self, system: str, content: list[Block], schema: dict[str, Any], on_activity: Activity | None = None,
@@ -114,9 +167,11 @@ class SubscriptionLLM:
     `model` and `effort` left as None use the account defaults, as Claude Code does.
     """
 
-    def __init__(self, model: str | None = None, effort: str | None = None) -> None:
+    def __init__(self, model: str | None = None, effort: str | None = None, profile: Path | None = None) -> None:
         self.model = model
         self.effort = effort
+        self.profile = profile
+        self.last_usage: Usage | None = None
         # An API key in the environment would take precedence over the login and bill the API silently.
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
@@ -151,6 +206,7 @@ class SubscriptionLLM:
             output_format={"type": "json_schema", "schema": schema} if schema else None,
             # Each call is self-contained; without this Claude Code saves every transcript to the user's Claude history.
             extra_args={"no-session-persistence": None},
+            env={"CLAUDE_CONFIG_DIR": str(self.profile)} if self.profile else {},
         )
         blocks = _to_api_blocks(content)
 
@@ -173,6 +229,8 @@ class SubscriptionLLM:
             raise TransientLLMError(f"Claude call failed: {e}") from e
         if result is None:
             raise TransientLLMError("Claude returned no result.")
+        if result.usage:
+            self.last_usage = Usage.from_api(result.usage, result.total_cost_usd)
         if result.is_error:
             detail = "; ".join(result.errors or []) or result.subtype
             status = result.api_error_status
@@ -195,6 +253,7 @@ class ApiLLM:
             raise MediaAnalysisError("The api backend needs the extra: `uv sync --extra api`.") from e
         self.model = model or self.DEFAULT_MODEL
         self.effort = effort
+        self.last_usage: Usage | None = None
         self._anthropic = anthropic
         self._client = anthropic.Anthropic()
 
@@ -230,6 +289,8 @@ class ApiLLM:
             raise MediaAnalysisError(f"Claude API rejected the request ({e.status_code}): {e.message}") from e
         except self._anthropic.APIConnectionError as e:
             raise TransientLLMError(f"Claude API connection error: {e}") from e
+        if message.usage:
+            self.last_usage = Usage.from_api(message.usage)
         if message.stop_reason == "refusal":
             raise MediaAnalysisError("Claude declined the request.")
         return "".join(b.text for b in message.content if b.type == "text")
@@ -247,7 +308,8 @@ class ApiLLM:
         return _with_retries(lambda: self._create(system, content, None, on_activity))
 
 
-def create_llm(backend: str, model: str | None = None, effort: str | None = None) -> LLM:
+def create_llm(backend: str, model: str | None = None, effort: str | None = None, profile: Path | None = None) -> LLM:
+    """`profile` is the Claude Code config folder for the subscription backend (None = Claude Code's default)."""
     if backend == "api":
         return ApiLLM(model, effort)
-    return SubscriptionLLM(model, effort)
+    return SubscriptionLLM(model, effort, profile)

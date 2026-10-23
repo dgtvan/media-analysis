@@ -5,6 +5,9 @@ interface IAppHost
 {
     AppSettings Settings { get; }
     AnalysisRunner Runner { get; }
+
+    /// <summary>How long each project's recordings are (the Length column).</summary>
+    MediaDurations Durations { get; }
     IReadOnlyList<Project> Projects { get; }
 
     /// <summary>Things the user must act on; the tray icon shows a warning until they are dismissed.</summary>

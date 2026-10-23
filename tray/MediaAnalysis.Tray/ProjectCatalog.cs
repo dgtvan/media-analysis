@@ -21,10 +21,16 @@ sealed record Project(
     DateTime? ReportWrittenUtc,
     ProjectState State,
     DateTime CreatedUtc = default,
-    DateTime NewestMediaUtc = default)
+    DateTime NewestMediaUtc = default,
+    IReadOnlyList<MediaFile>? MediaFiles = null)
 {
     public string ReportPath => System.IO.Path.Combine(OutputPath, ProjectCatalog.ReportFileName);
+
+    public IReadOnlyList<MediaFile> Media => MediaFiles ?? [];
 }
+
+/// <summary>A video or audio file of a project; equal only while the file is unchanged.</summary>
+sealed record MediaFile(string Path, long Size, DateTime WrittenUtc, bool IsVideo);
 
 /// <summary>
 /// Reads the projects folder: each subfolder is a project whose output goes to <c>&lt;output folder&gt;\&lt;name&gt;</c>.
@@ -35,9 +41,12 @@ static class ProjectCatalog
     public const string ReportFileName = "report.md";
 
     // Same lists as the core (src/media_analysis/config.py), which also only reads files at the top of the folder.
-    private static readonly HashSet<string> MediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
+    };
+    private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
         ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr",
     };
 
@@ -68,7 +77,7 @@ static class ProjectCatalog
     {
         DateTime lastModified = folder.LastWriteTimeUtc;
         DateTime newestMedia = DateTime.MinValue;
-        int mediaCount = 0;
+        var media = new List<MediaFile>();
         try
         {
             foreach (var file in folder.GetFiles())
@@ -77,9 +86,10 @@ static class ProjectCatalog
                 DateTime changed = file.LastWriteTimeUtc > file.CreationTimeUtc ? file.LastWriteTimeUtc : file.CreationTimeUtc;
                 if (changed > lastModified)
                     lastModified = changed;
-                if (MediaExtensions.Contains(file.Extension))
+                bool video = VideoExtensions.Contains(file.Extension);
+                if (video || AudioExtensions.Contains(file.Extension))
                 {
-                    mediaCount++;
+                    media.Add(new MediaFile(file.FullName, file.Length, file.LastWriteTimeUtc, video));
                     if (changed > newestMedia)
                         newestMedia = changed;
                 }
@@ -93,11 +103,11 @@ static class ProjectCatalog
         string report = outputPath.Length > 0 ? Path.Combine(outputPath, ReportFileName) : "";
         DateTime? reportWritten = report.Length > 0 && File.Exists(report) ? File.GetLastWriteTimeUtc(report) : null;
 
-        ProjectState state = mediaCount == 0 ? ProjectState.Empty
+        ProjectState state = media.Count == 0 ? ProjectState.Empty
             : reportWritten > newestMedia ? ProjectState.Analysed
             : ProjectState.NotAnalysed;
-        return new Project(folder.Name, folder.FullName, lastModified, mediaCount, outputPath, reportWritten, state,
-            folder.CreationTimeUtc, newestMedia);
+        return new Project(folder.Name, folder.FullName, lastModified, media.Count, outputPath, reportWritten, state,
+            folder.CreationTimeUtc, newestMedia, media);
     }
 
     private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
