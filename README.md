@@ -58,22 +58,23 @@ subfolder is a project (one recording session). Each project's report goes to `<
   suggested template*. Double-click opens the report (or the project folder). One analysis runs at a time; others
   queue. Stopping is cheap: analysing again continues from the cache. An ignored project no longer counts as waiting
   and is never started automatically. Filter, search, and *Analyse all not analysed* sit above the grid.
-- **Logs**: each analysis is logged from its first line to `%LOCALAPPDATA%\MediaAnalysis\data\logs`, ending with a
+- **Logs**: each analysis is logged from its first line to `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\logs`, ending with a
   performance summary (time per step, cached or not, transcription speed, Claude calls). The log window follows a
   running analysis live and has a readable and a full view.
 - **Config tab**: projects and output folders, *Analyse new projects automatically*, transcription model, spoken
-  language, Claude thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\MediaAnalysis\data\settings.json`).
-- **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\MediaAnalysis\data\templates`), with *New*, *Open* and
+  language, Claude thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\settings.json`).
+- **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\VanDang\MediaAnalysis\data\templates`), with *New*, *Open* and
   *Copy to my templates*.
 - **Automatic analysis** (off by default): projects added after you turn it on are queued once their files have
   stopped changing for 2 minutes (shown as *New: starts once its files stop changing*). Existing projects are left
   alone, and a failed or stopped analysis isn't retried automatically.
-- **About tab**: installed build, update status, where the engine, settings and logs are.
+- **About tab**: when the installed build was made, where the app, the engine, settings and logs are.
 - **Needs attention**: a failed analysis or a broken install turns the icon into a warning and shows a banner in the
   window until you dismiss it.
 
-The app starts at sign-in and updates itself; the analysis core has no update logic of its own. Results (outcome,
-elapsed time, log) are kept in `%LOCALAPPDATA%\MediaAnalysis\data\history.json`, so they survive restarts.
+The app starts at sign-in. It counts as **busy** while an analysis runs or is queued: an install then leaves it
+running and asks to be run again later. Results (outcome,
+elapsed time, log) are kept in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\history.json`, so they survive restarts.
 
 ### Meeting Recorder folders
 
@@ -81,15 +82,15 @@ A folder with Meeting Recorder's layout (`video.mp4` without sound, `audio-mic.w
 session: the two transcripts are merged into one conversation on a shared timeline, labelled *Me* (microphone) and
 *Others* (computer audio), and frames come from the video.
 
-## Installing on a shared Windows PC
+## Installing on Windows
 
-Follows the [App deployment standard v1.4](https://github.com/dgtvan/local-app-deployment-strategy), with the core's
-Python, libraries, ffmpeg and Whisper model shared on `D:` by all accounts and builds; see
+Follows the [App deployment standard v2.3](https://github.com/dgtvan/local-app-deployment-strategy), with the core's
+Python, libraries, ffmpeg and Whisper model kept outside the install so builds share them; see
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```
-publish.cmd          # agent/developer: publish a build to D:\Apps\MediaAnalysis
-install.cmd          # each account, once: installs and starts the tray app, puts `media-analysis` on PATH
+deploy.cmd           # build, uninstall, install: installs and starts the tray app, puts `media-analysis` on PATH
+uninstall.cmd        # removes the app; settings, templates, logs and reports are kept
 media-analysis run <input-folder> <output-folder>
 ```
 
@@ -141,7 +142,7 @@ minutes.
 
 ```
 uv run media-analysis templates list
-uv run media-analysis templates new sales-call      # creates %LOCALAPPDATA%\MediaAnalysis\data\templates\sales-call.md
+uv run media-analysis templates new sales-call      # creates %LOCALAPPDATA%\VanDang\MediaAnalysis\data\templates\sales-call.md
 ```
 
 A template is a Markdown file with YAML front matter (`id`, `name`, `description`, `signals`, `evidence`, `sections`)

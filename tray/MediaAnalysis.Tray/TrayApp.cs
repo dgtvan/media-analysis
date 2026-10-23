@@ -3,13 +3,15 @@ using System.Diagnostics;
 namespace MediaAnalysis.Tray;
 
 /// <summary>
-/// Runs in the background: watches the projects folder, runs analyses, updates itself, and shows the state in the
-/// tray icon (blue working, amber waiting, grey idle). The tray menu has Status (the main window) and Exit.
+/// Runs in the background: watches the projects folder, runs analyses, and shows the state in the tray icon (blue
+/// working, amber waiting, grey idle). The tray menu has Status (the main window) and Exit.
 /// </summary>
 /// <remarks>
 /// Working: an analysis runs or is queued. Waiting: nothing runs, but at least one project has media files and no
 /// up-to-date report. Idle: everything is analysed. Anything the user must act on (a failed analysis, a broken
 /// install) switches the icon to a warning that stays until the user dismisses it in the window.
+/// An install asks the app to close (App deployment standard v2.3, section 4.4); it refuses while busy, that is while
+/// an analysis runs or is queued.
 /// </remarks>
 sealed class TrayApp : ApplicationContext, IAppHost
 {
@@ -21,7 +23,9 @@ sealed class TrayApp : ApplicationContext, IAppHost
     // Also how soon a settled new project starts when auto-analysis is on.
     private readonly System.Windows.Forms.Timer _rescanTimer = new() { Interval = 30_000 };
     private readonly List<string> _problems = [];
-    private readonly SelfUpdater _updater = new();
+    private readonly EventWaitHandle _exitRequest = new(false, EventResetMode.AutoReset, @"Local\MediaAnalysis-Exit");
+    private readonly EventWaitHandle _exitRefused = new(false, EventResetMode.AutoReset, @"Local\MediaAnalysis-ExitRefused");
+    private readonly RegisteredWaitHandle _exitWait;
     private readonly AnalysisRunner _runner;
     private readonly SynchronizationContext _ui;
     private MainForm? _window;
@@ -29,7 +33,6 @@ sealed class TrayApp : ApplicationContext, IAppHost
     private System.Threading.Timer? _watchDebounce;
     private List<Project> _projects = [];
     private string? _coreProblemReported;
-    private string? _failedBuildReported;
     private string? _lastReport;
 
     public event Action? Changed;
@@ -64,7 +67,6 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _runner.Changed += Refresh;
         _runner.Finished += OnAnalysisFinished;
         _rescanTimer.Tick += (_, _) => Rescan();
-        _updater.BuildsChanged += () => _ui.Post(_ => CheckForUpdate(), null);
         Application.ThreadException += (_, e) => AddProblem($"Unexpected error: {e.Exception.Message}");
 
         foreach (string problem in migrationProblems.Concat(AppInitializer.Run(_settings, settingsLoadError)))
@@ -78,8 +80,8 @@ sealed class TrayApp : ApplicationContext, IAppHost
             ShowBalloon("Media Analysis", "Choose a projects folder and an output folder on the Config tab.", ToolTipIcon.Info);
             _ui.Post(_ => ShowWindow(), null);
         }
-        // Also picks up a build published while the app wasn't running, and reports state at startup.
-        _ui.Post(_ => CheckForUpdate(), null);
+        _exitWait = ThreadPool.RegisterWaitForSingleObject(_exitRequest,
+            (_, _) => _ui.Post(_ => OnExitRequested(), null), null, Timeout.Infinite, executeOnlyOnce: false);
     }
 
     // ---- IAppHost -------------------------------------------------------------------------------------------------
@@ -88,8 +90,6 @@ sealed class TrayApp : ApplicationContext, IAppHost
     public AnalysisRunner Runner => _runner;
     public IReadOnlyList<Project> Projects => _projects;
     public IReadOnlyList<string> Problems => _problems;
-    public string? InstalledBuildId => _updater.InstalledBuildId;
-    public string? UpdateSource => _updater.PublishRoot;
 
     public CoreConfig? LoadCore()
     {
@@ -121,7 +121,6 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _problems.Clear();
         _coreProblemReported = null;
         Refresh();
-        CheckForUpdate();
     }
 
     public void SaveSettings(bool foldersChanged)
@@ -137,56 +136,6 @@ sealed class TrayApp : ApplicationContext, IAppHost
         if (foldersChanged)
             WatchProjects();
         Rescan();
-    }
-
-    /// <summary>
-    /// Installs the latest published build when it differs from this one (newer, or older after a rollback),
-    /// but never during an analysis or while a warning is undismissed (restarting would lose it). A build whose
-    /// install already failed is not retried, so a broken build can't cause a restart loop.
-    /// </summary>
-    public void CheckForUpdate()
-    {
-        if (!_updater.IsEnabled)
-            return;
-        string? latest = _updater.FindLatestBuild();
-        if (latest == null || latest == _updater.InstalledBuildId)
-        {
-            _updater.WriteState("running");
-            return;
-        }
-        if (_updater.LastAttemptId == latest)
-        {
-            _updater.WriteState($"failed: build {latest} did not install");
-            if (_failedBuildReported != latest)
-            {
-                _failedBuildReported = latest;
-                AddProblem(Path.GetFileName(AppContext.BaseDirectory.TrimEnd('\\')).Equals("app", StringComparison.OrdinalIgnoreCase)
-                    ? $"Update {latest} could not be installed. Run install.cmd to repair the install."
-                    : "This copy is installed in an old location and can't update itself any more. "
-                        + "Run install.cmd once to move it; after that it updates itself again.");
-            }
-            return;
-        }
-        if (_runner.IsBusy)
-        {
-            _updater.WriteState($"waiting: build {latest} until the analysis in progress ends");
-            return;
-        }
-        if (_problems.Count > 0)
-        {
-            _updater.WriteState($"waiting: build {latest} until the warning is dismissed");
-            return;
-        }
-        try
-        {
-            _updater.LaunchUpdate(latest);
-            ExitNow();
-        }
-        catch (Exception ex)
-        {
-            _updater.WriteState($"failed: build {latest}: {ex.Message}", latest);
-            AddProblem($"Could not install update {latest}: {ex.Message}");
-        }
     }
 
     // ---- Internals ------------------------------------------------------------------------------------------------
@@ -278,7 +227,6 @@ sealed class TrayApp : ApplicationContext, IAppHost
                 break;
         }
         Rescan();
-        CheckForUpdate();
     }
 
     /// <summary>Records something the user must act on and switches the tray icon to a warning until it is dismissed.</summary>
@@ -287,6 +235,18 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _problems.Add($"{DateTime.Now:HH:mm}  {text}");
         Refresh();
         _tray.ShowBalloonTip(10000, "Media Analysis needs attention", Truncate(text, 250), ToolTipIcon.Warning);
+    }
+
+    /// <summary>An install wants the app closed: close when idle, otherwise refuse and keep working.</summary>
+    private void OnExitRequested()
+    {
+        if (!_runner.IsBusy)
+        {
+            ExitNow();
+            return;
+        }
+        _exitRefused.Set();
+        ShowBalloon("Media Analysis", "An install was refused because an analysis is running. Run it again once the analysis has finished.", ToolTipIcon.Info);
     }
 
     private void Exit()
@@ -304,7 +264,9 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _rescanTimer.Dispose();
         _watcher?.Dispose();
         _watchDebounce?.Dispose();
-        _updater.Dispose();
+        _exitWait.Unregister(null);
+        _exitRequest.Dispose();
+        _exitRefused.Dispose();
         _window?.Dispose();
         _tray.Visible = false;
         _tray.Dispose();

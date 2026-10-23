@@ -9,9 +9,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# The Windows app keeps everything per user in %LOCALAPPDATA%\MediaAnalysis\data (App deployment standard v1.4).
+# The Windows app passes its data folder (App deployment standard v2.3); the command line defaults to the same folder.
 USER_HOME = (
-    Path(os.environ["LOCALAPPDATA"]) / "MediaAnalysis" / "data"
+    Path(os.environ["MEDIA_ANALYSIS_HOME"])
+    if os.environ.get("MEDIA_ANALYSIS_HOME")
+    else Path(os.environ["LOCALAPPDATA"]) / "VanDang" / "MediaAnalysis" / "data"
     if sys.platform == "win32" and os.environ.get("LOCALAPPDATA")
     else Path.home() / ".media-analysis"
 )

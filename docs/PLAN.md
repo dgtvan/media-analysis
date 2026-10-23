@@ -148,7 +148,7 @@ Built-in: `meeting`, `technical-discussion`, `lecture-tutorial`, `interview`, `l
 - `language-practice` includes a learner assessment: grammar mistakes with corrections, vocabulary, fluency,
   pronunciation notes (from transcript evidence), and suggested exercises.
 
-User templates live in a user folder (`%LOCALAPPDATA%\MediaAnalysis\data\templates\` on Windows, `~/.media-analysis/templates/` elsewhere) and override built-ins with the same id.
+User templates live in a user folder (`%LOCALAPPDATA%\VanDang\MediaAnalysis\data\templates\` on Windows, `~/.media-analysis/templates/` elsewhere) and override built-ins with the same id.
 
 CLI:
 - `media-analysis templates list`
@@ -206,7 +206,7 @@ tests/
 | M3 | Frame plan + dense extraction + sharpest-frame selection + vision reading (text + description) |
 | M4 | Report generation + output assembly + link validation; all six built-in templates |
 | M5 | Optional diarization; draft-a-template-from-a-run helper |
-| T1 | Tray app (.NET): watch a projects folder, recent-projects menu with Analyse, working/waiting/idle icon, self-update; core stays analysis-only |
+| T1 | Tray app (.NET): watch a projects folder, recent-projects menu with Analyse, working/waiting/idle icon; core stays analysis-only |
 | T2 | Full window (projects grid with status, elapsed and actions; live logs; Config/Templates/About tabs); run history; core: generic report instead of stopping, Meeting Recorder folders as one session, performance summary |
 
 Status: M0–M4 implemented and verified end to end on a synthetic sample (video and audio-only, detection, forced

@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace MediaAnalysis.Tray;
 
 /// <summary>
-/// How to start the Python core, from <c>core.json</c> next to the exe (written by publish.ps1): the shared Python
+/// How to start the Python core, from <c>core.json</c> next to the exe (written by build.ps1): the shared Python
 /// environment, the core's code folder and the shared ffmpeg/model folders.
 /// </summary>
 sealed class CoreConfig
@@ -29,7 +29,7 @@ sealed class CoreConfig
             var config = JsonSerializer.Deserialize<CoreConfig>(File.ReadAllText(path));
             if (config == null || !File.Exists(config.Python))
             {
-                error = $"The analysis engine is missing ({config?.Python ?? path}). Run install.cmd to repair the install.";
+                error = $"The analysis engine is missing ({config?.Python ?? path}). Run deploy.cmd to repair the install.";
                 return null;
             }
             config.PythonPath = Path.GetFullPath(Path.Combine(folder, config.PythonPath));
@@ -37,7 +37,7 @@ sealed class CoreConfig
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            error = $"The analysis engine settings could not be read ({path}): {ex.Message}. Run install.cmd to repair the install.";
+            error = $"The analysis engine settings could not be read ({path}): {ex.Message}. Run deploy.cmd to repair the install.";
             return null;
         }
     }
@@ -66,6 +66,7 @@ sealed class CoreConfig
         foreach (var (name, value) in Environment)
             info.Environment[name] = value;
         info.Environment["PYTHONPATH"] = PythonPath;
+        info.Environment["MEDIA_ANALYSIS_HOME"] = AppPaths.Data;
         info.Environment["PYTHONIOENCODING"] = "utf-8";
         return info;
     }

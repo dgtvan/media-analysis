@@ -707,16 +707,10 @@ sealed class MainForm : Form
 
     private TabPage CreateAboutPage()
     {
-        var check = new Button { Text = "Check for updates now", AutoSize = true };
-        check.Click += (_, _) =>
-        {
-            _host.CheckForUpdate();
-            LoadAbout();
-        };
         var logs = new Button { Text = "Open logs folder", AutoSize = true };
         logs.Click += (_, _) => OpenFolder(AppPaths.Logs);
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8) };
-        bar.Controls.AddRange([check, logs]);
+        bar.Controls.Add(logs);
         var page = new TabPage("About");
         page.Controls.Add(bar);
         page.Controls.Add(_about);
@@ -725,24 +719,12 @@ sealed class MainForm : Form
 
     private void LoadAbout()
     {
-        string updateState = "";
-        try
-        {
-            string path = AppPaths.UpdateState;
-            if (File.Exists(path))
-                updateState = File.ReadAllLines(path).FirstOrDefault() ?? "";
-        }
-        catch (IOException)
-        {
-        }
         CoreConfig? core = _host.LoadCore();
         (string, string)[] rows =
         [
-            ("Version", _host.InstalledBuildId ?? "development build"),
+            ("Built", BuildInfo.Built),
             ("Installed in", AppContext.BaseDirectory.TrimEnd('\\')),
-            ("Updates from", _host.UpdateSource ?? "(not installed from a publish folder; no automatic updates)"),
-            ("Update status", updateState.Length > 0 ? updateState : "-"),
-            ("Analysis engine", core != null ? core.Python : "not available (run install.cmd to repair)"),
+            ("Analysis engine", core != null ? core.Python : "not available (run deploy.cmd to repair)"),
             ("Data", AppPaths.Data),
         ];
         _about.SuspendLayout();

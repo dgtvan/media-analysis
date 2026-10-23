@@ -10,11 +10,6 @@ interface IAppHost
     /// <summary>Things the user must act on; the tray icon shows a warning until they are dismissed.</summary>
     IReadOnlyList<string> Problems { get; }
 
-    string? InstalledBuildId { get; }
-
-    /// <summary>The publish folder updates come from, or null for a development build.</summary>
-    string? UpdateSource { get; }
-
     /// <summary>Raised on the UI thread when projects, runs, problems or settings change.</summary>
     event Action? Changed;
 
@@ -24,6 +19,4 @@ interface IAppHost
 
     /// <summary>Saves the settings; <paramref name="foldersChanged"/> re-watches the projects folder.</summary>
     void SaveSettings(bool foldersChanged);
-
-    void CheckForUpdate();
 }

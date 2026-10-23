@@ -122,15 +122,15 @@ sealed class AnalysisRunner : IDisposable
             log.WriteLine($"# Project:  {path}");
             log.WriteLine($"# Output:   {output}");
             log.WriteLine($"# Started:  {run.StartedAt:yyyy-MM-dd HH:mm:ss}");
-            log.WriteLine($"# Build:    {ReadBuildId() ?? "development"}");
+            log.WriteLine($"# Build:    {BuildInfo.Built}");
             log.WriteLine($"# Options:  {(options.Count > 0 ? string.Join(' ', options) : "(defaults)")}");
 
             CoreConfig? core = _core();
             if (core == null)
             {
-                log.WriteLine("# The analysis engine is not available. Run install.cmd to repair the install.");
+                log.WriteLine("# The analysis engine is not available. Run deploy.cmd to repair the install.");
                 log.Dispose();
-                Complete(run, RunOutcome.Failed, "The analysis engine is not available. Run install.cmd to repair the install.");
+                Complete(run, RunOutcome.Failed, "The analysis engine is not available. Run deploy.cmd to repair the install.");
                 return;
             }
 
@@ -248,19 +248,6 @@ sealed class AnalysisRunner : IDisposable
         _queue.Clear();
         Kill();
         _process?.Dispose();
-    }
-
-    private static string? ReadBuildId()
-    {
-        try
-        {
-            string path = Path.Combine(AppContext.BaseDirectory, "build-id.txt");
-            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
     }
 
     private static bool SamePath(string a, string b) =>

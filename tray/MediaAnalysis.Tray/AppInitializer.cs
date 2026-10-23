@@ -1,33 +1,40 @@
 namespace MediaAnalysis.Tray;
 
 /// <summary>
-/// Everything the app needs before it can work, run on every start (App deployment standard v1.4, section 7.1).
-/// The installer deliberately does none of this, so fresh installs, self-updates and sign-ins share one path.
+/// Everything the app needs before it can work, run on every start (App deployment standard v2.3, section 4.2).
+/// The install script deliberately does none of this, so fresh installs, reinstalls and sign-ins share one path.
 /// </summary>
 static class AppInitializer
 {
     public const int CurrentSchemaVersion = 1;
 
     /// <summary>
-    /// Copies data from the locations used before v1.4 into <see cref="AppPaths.Data"/> when the new location doesn't
-    /// have it yet. Old data is never deleted (standard section 10, step 3). Runs before the settings are loaded.
+    /// Copies data from the locations used before standard v2.2 into <see cref="AppPaths.Data"/> when the new location
+    /// doesn't have it yet. Old data is never deleted (standard section 7, step 4). Runs before the settings are loaded.
     /// Returns the problems the user needs to know about.
     /// </summary>
-    public static List<string> MigrateLegacyData() => MigrateLegacyData(AppPaths.LegacyRoaming, AppPaths.Root, AppPaths.Data);
+    public static List<string> MigrateLegacyData() => MigrateLegacyData(AppPaths.LegacyRoaming, AppPaths.LegacyLocal, AppPaths.Data);
 
     internal static List<string> MigrateLegacyData(string legacyRoaming, string legacyLocal, string data)
     {
         var problems = new List<string>();
-        TryRun(problems, "Could not move the settings and logs to the new data folder", () =>
+        TryRun(problems, "Could not copy the settings and logs from the previous install", () =>
         {
+            // v1.4 kept everything in legacyLocal\data; before that, settings and templates were in Roaming and logs
+            // and history at the top of legacyLocal.
+            string v14 = Path.Combine(legacyLocal, "data");
+            string settingsSource = File.Exists(Path.Combine(v14, "settings.json")) ? v14 : legacyRoaming;
+            string logsSource = Directory.Exists(Path.Combine(v14, "logs")) ? v14 : legacyLocal;
+            if (!File.Exists(Path.Combine(settingsSource, "settings.json")) && !Directory.Exists(Path.Combine(logsSource, "logs")))
+                return;
+
             Directory.CreateDirectory(data);
-            CopyFileIfMissing(Path.Combine(legacyRoaming, "settings.json"), Path.Combine(data, "settings.json"));
-            CopyFolderIfMissing(Path.Combine(legacyRoaming, "templates"), Path.Combine(data, "templates"));
-            CopyFileIfMissing(Path.Combine(legacyLocal, "update-state.txt"), Path.Combine(data, "update-state.txt"));
-            string oldLogs = Path.Combine(legacyLocal, "logs");
+            CopyFileIfMissing(Path.Combine(settingsSource, "settings.json"), Path.Combine(data, "settings.json"));
+            CopyFolderIfMissing(Path.Combine(settingsSource, "templates"), Path.Combine(data, "templates"));
+            string oldLogs = Path.Combine(logsSource, "logs");
             string newLogs = Path.Combine(data, "logs");
             bool movedLogs = CopyFolderIfMissing(oldLogs, newLogs);
-            string oldHistory = Path.Combine(legacyLocal, "history.json");
+            string oldHistory = Path.Combine(logsSource, "history.json");
             string newHistory = Path.Combine(data, "history.json");
             if (File.Exists(oldHistory) && !File.Exists(newHistory))
             {
