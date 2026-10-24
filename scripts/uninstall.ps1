@@ -41,13 +41,10 @@ try {
     # 1. Stop
     Stop-App -Force:$Force
 
-    # 2. Registration, including entries from earlier install methods
+    # 2. Registration
     Remove-ItemProperty $RunKey -Name $AppId -ErrorAction SilentlyContinue
     Remove-Item $Shortcut -Force -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $AppId -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path ([Environment]::GetFolderPath('Startup')) "$AppName.lnk") -Force -ErrorAction SilentlyContinue
-    Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppId" -Recurse -Force -ErrorAction SilentlyContinue
-    Set-UserPath -Remove (@($AppDir) + $LegacyInstallDirs)
+    Set-UserPath -Remove @($AppDir)
 
     # 3. App folder, then the app's and the publisher's folders when nothing else is left in them
     if (Test-Path $AppDir) {

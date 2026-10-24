@@ -29,9 +29,8 @@ $ModelsDir = Join-Path $Runtimes 'models\huggingface'
 $WhisperModels = @('large-v3')
 $FfmpegVersion = '9.0.2'   # a Gyan.FFmpeg winget version
 
-# Install locations used before standard v2.2; their data is copied by the app, never deleted by the scripts.
-$LegacyInstallDirs = @((Join-Path $env:LOCALAPPDATA "Programs\$AppId"), (Join-Path $env:LOCALAPPDATA "$AppId\app"))
-$LegacyPickup = "D:\Apps\$AppId\pickup\$env:USERNAME"
+# Installs of this app under earlier names (app.psd1 Previous): install.ps1 removes them; the app copies their data.
+$Previous  = @($AppDef.Previous | Where-Object { $_ })
 
 function Write-Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
@@ -70,18 +69,19 @@ function Set-UserPath([string[]]$Add, [string[]]$Remove) {
 }
 
 # Standard section 3.5: ask the app to close, and let it refuse while it is busy (an analysis runs or is queued).
-function Stop-App([switch]$Force) {
-    $own = @(Get-CimInstance Win32_Process -Filter "Name = '$ExeName'" | Where-Object {
+# -Id and -Name default to this app; install.ps1 passes those of an earlier name.
+function Stop-App([switch]$Force, [string]$Id = $AppId, [string]$Name = $AppName) {
+    $own = @(Get-CimInstance Win32_Process -Filter "Name = '$Id.exe'" | Where-Object {
         (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $env:USERNAME
     })
     if ($own.Count -eq 0) { return }
 
-    Write-Step "Asking $AppName to close"
+    Write-Step "Asking $Name to close"
     $refused = $null
     try {
-        $refused = [Threading.EventWaitHandle]::OpenExisting("Local\$AppId-ExitRefused")
+        $refused = [Threading.EventWaitHandle]::OpenExisting("Local\$Id-ExitRefused")
         $null = $refused.Reset()
-        $exit = [Threading.EventWaitHandle]::OpenExisting("Local\$AppId-Exit")
+        $exit = [Threading.EventWaitHandle]::OpenExisting("Local\$Id-Exit")
         $null = $exit.Set()
         $exit.Dispose()
     } catch {
@@ -99,14 +99,14 @@ function Stop-App([switch]$Force) {
 
     if (-not $Force) {
         if ($answer -eq 'refused') {
-            Write-Host "$AppName is busy (an analysis is running or queued). Let it finish or stop it, then run this again, or use -Force (the analysis stops; analysing the project again continues where it stopped)." -ForegroundColor Yellow
+            Write-Host "$Name is busy (an analysis is running or queued). Let it finish or stop it, then run this again, or use -Force (the analysis stops; analysing the project again continues where it stopped)." -ForegroundColor Yellow
         } else {
-            Write-Host "$AppName did not answer the close request within 10 s. Exit it from the tray menu, then run this again, or use -Force." -ForegroundColor Yellow
+            Write-Host "$Name did not answer the close request within 10 s. Exit it from the tray menu, then run this again, or use -Force." -ForegroundColor Yellow
         }
         exit 3
     }
 
-    Write-Step "Closing $AppName (-Force)"
+    Write-Step "Closing $Name (-Force)"
     # /T also ends the analysis and its helpers (ffmpeg, Claude Code).
     $own | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }
     Wait-Process -Id $own.ProcessId -Timeout 30 -ErrorAction SilentlyContinue

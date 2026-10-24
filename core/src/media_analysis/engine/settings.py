@@ -9,11 +9,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# The Windows app passes its data folder (App deployment standard v2.3); the command line defaults to the same folder.
+# The Windows app passes its data folder (App deployment standard v2.3); the command line defaults to Recording
+# Reports' folder, whose install puts the command on PATH.
 USER_HOME = (
     Path(os.environ["MEDIA_ANALYSIS_HOME"])
     if os.environ.get("MEDIA_ANALYSIS_HOME")
-    else Path(os.environ["LOCALAPPDATA"]) / "VanDang" / "MediaAnalysis" / "data"
+    else Path(os.environ["LOCALAPPDATA"]) / "VanDang" / "RecordingReports" / "data"
     if sys.platform == "win32" and os.environ.get("LOCALAPPDATA")
     else Path.home() / ".media-analysis"
 )

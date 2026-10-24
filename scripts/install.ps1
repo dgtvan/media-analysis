@@ -101,7 +101,8 @@ try {
     $runtime = Get-Content (Join-Path $Dist 'runtime\runtime.json') -Raw | ConvertFrom-Json
     Install-CoreRuntime $runtime | Out-Host
 
-    # 3. Stop
+    # 3. Stop, also an install under an earlier name
+    foreach ($old in $Previous) { Stop-App -Id $old.AppId -Name $old.AppName -Force:$Force }
     Stop-App -Force:$Force
 
     # 4. Copy. The guard makes sure a wrong path can never mirror over the data folder.
@@ -125,19 +126,22 @@ try {
     $link.Description = $AppDef.Description
     $link.Save()
 
-    Set-UserPath -Add $AppDir -Remove $LegacyInstallDirs
-
-    # 6. Entries from earlier install methods (standard v1.x). Their data is left where it is; the app copies it.
-    Unregister-ScheduledTask -TaskName $AppId -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path ([Environment]::GetFolderPath('Startup')) "$AppName.lnk") -Force -ErrorAction SilentlyContinue
-    Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppId" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $LegacyPickup -Recurse -Force -ErrorAction SilentlyContinue
-    foreach ($dir in $LegacyInstallDirs) {
-        if (Test-Path $dir) {
-            Write-Step "Removing the old install in $dir"
-            Remove-Item $dir -Recurse -Force
+    # 6. The install under an earlier name. Its data is left where it is; the app copies it on its first start.
+    $oldAppDirs = @()
+    foreach ($old in $Previous) {
+        $oldRoot = Join-Path $env:LOCALAPPDATA "$Publisher\$($old.AppId)"
+        $oldAppDirs += Join-Path $oldRoot 'app'
+        Remove-ItemProperty $RunKey -Name $old.AppId -ErrorAction SilentlyContinue
+        Remove-Item (Join-Path ([Environment]::GetFolderPath('Programs')) "$($old.AppName).lnk") -Force -ErrorAction SilentlyContinue
+        foreach ($dir in (Join-Path $oldRoot 'app'), (Join-Path $oldRoot 'dependencies')) {
+            if (Test-Path $dir) {
+                Write-Step "Removing $dir ($($old.AppName))"
+                Remove-Item $dir -Recurse -Force
+            }
         }
     }
+    Set-UserPath -Add $AppDir -Remove $oldAppDirs
+
     # Core environments of earlier builds (hardlinks, so this frees little but keeps the folder tidy).
     Get-ChildItem $EnvsDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $runtime.EnvDir } |
         ForEach-Object {
