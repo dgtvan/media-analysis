@@ -1,15 +1,18 @@
 <#
 .SYNOPSIS
-    Names, paths and helpers shared by build.ps1, install.ps1 and uninstall.ps1 (dot-sourced).
+    Names, paths and helpers shared by build.ps1, install.ps1 and uninstall.ps1 (dot-sourced). The caller's -App
+    parameter names the app; its identity comes from <app folder>pp.psd1.
 #>
 
-$AppId     = 'MediaAnalysis'
-$AppName   = 'Media Analysis'
+$AppSource = (Resolve-Path $App).Path
+$AppDef    = Import-PowerShellDataFile (Join-Path $AppSource 'app.psd1')
+$AppId     = $AppDef.AppId
+$AppName   = $AppDef.AppName
 $ExeName   = "$AppId.exe"
 $Publisher = 'VanDang'
 $Repo      = Split-Path -Parent $PSScriptRoot
 $Core      = Join-Path $Repo 'core'
-$Dist      = Join-Path $Repo 'dist'
+$Dist      = Join-Path $AppSource 'dist'
 $Root      = Join-Path $env:LOCALAPPDATA "$Publisher\$AppId"
 $AppDir    = Join-Path $Root 'app'
 $DataDir   = Join-Path $Root 'data'

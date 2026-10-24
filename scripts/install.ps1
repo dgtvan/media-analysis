@@ -6,12 +6,15 @@
     Follows the App deployment standard v2.3, section 3.2 (https://github.com/dgtvan/local-app-deployment-strategy).
     Creates the core's runtime if it is missing: Python, the library store, ffmpeg and the Whisper model in
     %LOCALAPPDATA%\VanDang\dependencies (shared by apps), the library environment in
-    %LOCALAPPDATA%\VanDang\MediaAnalysis\dependencies (this app only). Then copies dist\ to %LOCALAPPDATA%\VanDang\MediaAnalysis\app, starts it at sign-in (HKCU Run) and from the Start
+    %LOCALAPPDATA%\VanDang\<AppId>\dependencies (this app only). Then copies dist\ to %LOCALAPPDATA%\VanDang\<AppId>\app, starts it at sign-in (HKCU Run) and from the Start
     Menu, puts the media-analysis command on this account's PATH, and starts the app. It does no app initialization
     (the app does that itself at startup) and never touches the data folder. Re-running it is safe.
 
     Exit codes: 0 installed (and started unless -NoStart), 1 error, 3 refused because the app is busy (an analysis
     is running or queued) or didn't answer the close request.
+
+.PARAMETER App
+    The app's folder in the repo (apps\<app>), which holds its app.psd1. Its .cmd files pass it.
 
 .PARAMETER NoStart
     Don't start the app after installing.
@@ -19,7 +22,7 @@
 .PARAMETER Force
     Close the app even during an analysis. The analysis stops; analysing the project again continues where it stopped.
 #>
-param([switch]$NoStart, [switch]$Force)
+param([Parameter(Mandatory)][string]$App, [switch]$NoStart, [switch]$Force)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
@@ -119,7 +122,7 @@ try {
     $link.TargetPath = $ExePath
     $link.Arguments = "--data-dir `"$DataDir`""
     $link.WorkingDirectory = $AppDir
-    $link.Description = 'Analyse folders of recordings into reports'
+    $link.Description = $AppDef.Description
     $link.Save()
 
     Set-UserPath -Add $AppDir -Remove $LegacyInstallDirs

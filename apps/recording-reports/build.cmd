@@ -10,7 +10,7 @@ set ARGS=%ARGS% %1
 shift
 goto collect
 :run
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%HERE%scripts\deploy.ps1"%ARGS%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%HERE%..\..\scripts\build.ps1" -App "%HERE%."%ARGS%
 set "RC=%ERRORLEVEL%"
 if not defined QUIET pause
 exit /b %RC%

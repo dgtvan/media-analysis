@@ -44,7 +44,7 @@ sealed class CoreConfig
 
     /// <summary>A hidden process running <c>media-analysis run &lt;input&gt; &lt;output&gt; --json [options]</c>.</summary>
     public ProcessStartInfo RunCommand(string inputDir, string outputDir, IEnumerable<string> options) =>
-        Command(["run", inputDir, outputDir, "--json", .. options], inputDir);
+        Command(["report", inputDir, outputDir, "--json", .. options], inputDir);
 
     /// <summary>A hidden process running <c>media-analysis &lt;args&gt;</c> with output captured.</summary>
     public ProcessStartInfo Command(IEnumerable<string> args, string? workingDirectory = null)
@@ -75,7 +75,7 @@ sealed class CoreConfig
     public string BuiltinTemplatesDir => System.IO.Path.Combine(PythonPath, "media_analysis", "templates", "builtin");
 }
 
-/// <summary>One line of the core's <c>--json</c> output (see src/media_analysis/events.py and cli.py).</summary>
+/// <summary>One line of the core's <c>--json</c> output (see core/src/media_analysis/engine/events.py and cli/sinks.py).</summary>
 sealed record CoreEvent(string Event, string Stage, string Message, double? Completed, double? Total, bool Generic = false)
 {
     /// <summary>Parses one JSON line; null for anything that isn't an event object.</summary>

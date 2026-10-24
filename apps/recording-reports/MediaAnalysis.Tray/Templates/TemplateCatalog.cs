@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace MediaAnalysis.Tray;
 
-/// <summary>One report template file (see src/media_analysis/templates/registry.py for the format).</summary>
+/// <summary>One report template file (see core/src/media_analysis/workflows/report/templates/registry.py for the format).</summary>
 sealed record TemplateInfo(string Id, string Name, string Description, string Path, bool BuiltIn, bool Fallback, bool Overridden);
 
 /// <summary>

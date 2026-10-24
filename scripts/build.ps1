@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds Media Analysis (tray app + analysis core) into dist\.
+    Builds an app (its Windows app + the analysis core) into <app folder>\dist\.
 
 .DESCRIPTION
     Follows the App deployment standard v2.3, section 3.1 (https://github.com/dgtvan/local-app-deployment-strategy).
@@ -10,7 +10,12 @@
     missing (docs/DEPLOYMENT.md).
 
     Exit codes: 0 built, 1 error.
+
+.PARAMETER App
+    The app's folder in the repo (apps\<app>), which holds its app.psd1. Its .cmd files pass it.
 #>
+param([Parameter(Mandatory)][string]$App)
+
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
@@ -27,7 +32,7 @@ try {
     }
 
     Write-Step "Building the tray app into $Dist"
-    & dotnet publish (Join-Path $Repo 'tray\MediaAnalysis.Tray') -c Release -o $Dist --nologo -v quiet | Out-Host
+    & dotnet publish (Join-Path $AppSource $AppDef.Project) -c Release -o $Dist --nologo -v quiet | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Building the tray app failed (dotnet exit code $LASTEXITCODE)." }
 
     Write-Step 'Adding the analysis core'

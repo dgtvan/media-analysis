@@ -1,6 +1,6 @@
 namespace MediaAnalysis.Tray;
 
-/// <summary>Plain-language names for the core's stages (src/media_analysis/core/pipeline.py, STAGES).</summary>
+/// <summary>Plain-language names for the core's stages (core/src/media_analysis/workflows/report/workflow.py, ReportWorkflow.stages).</summary>
 static class RunStatus
 {
     private static readonly Dictionary<string, string> StageNames = new()

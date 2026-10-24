@@ -40,7 +40,7 @@ static class ProjectCatalog
 {
     public const string ReportFileName = "report.md";
 
-    // Same lists as the core (src/media_analysis/config.py), which also only reads files at the top of the folder.
+    // Same lists as the core (core/src/media_analysis/understand/ingest.py), which also only reads files at the top of the folder.
     private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",

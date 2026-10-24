@@ -1,17 +1,20 @@
 <#
 .SYNOPSIS
-    Removes Media Analysis for the current account.
+    Removes an app for the current account.
 
 .DESCRIPTION
     Follows the App deployment standard v2.3, section 3.3 (https://github.com/dgtvan/local-app-deployment-strategy).
     Stops the app, removes the start-at-sign-in entry, the Start Menu shortcut, the PATH entry and
-    %LOCALAPPDATA%\VanDang\MediaAnalysis\app, and this app's own dependencies
-    (%LOCALAPPDATA%\VanDang\MediaAnalysis\dependencies). Settings, templates, logs
-    (%LOCALAPPDATA%\VanDang\MediaAnalysis\data), reports and the dependencies shared by apps
+    %LOCALAPPDATA%\VanDang\<AppId>\app, and this app's own dependencies
+    (%LOCALAPPDATA%\VanDang\<AppId>\dependencies). Settings, templates, logs
+    (%LOCALAPPDATA%\VanDang\<AppId>\data), reports and the dependencies shared by apps
     (%LOCALAPPDATA%\VanDang\dependencies) are never deleted. Succeeds and does nothing when the app isn't installed.
 
     Exit codes: 0 removed, 1 error, 3 refused because the app is busy (an analysis is running or queued) or didn't
     answer the close request.
+
+.PARAMETER App
+    The app's folder in the repo (apps\<app>), which holds its app.psd1. Its .cmd files pass it.
 
 .PARAMETER NoDataWarning
     Don't print where the data was kept (used by deploy.ps1, which installs again right away).
@@ -22,7 +25,7 @@
 .PARAMETER Force
     Close the app even during an analysis. The analysis stops.
 #>
-param([switch]$NoDataWarning, [switch]$KeepDependencies, [switch]$Force)
+param([Parameter(Mandatory)][string]$App, [switch]$NoDataWarning, [switch]$KeepDependencies, [switch]$Force)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
