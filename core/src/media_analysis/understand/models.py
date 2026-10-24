@@ -1,4 +1,4 @@
-"""Artifacts passed between pipeline stages. Each one is cached as JSON."""
+"""What the understanding stages find in the input files. Each result is cached as JSON."""
 
 from __future__ import annotations
 
@@ -6,12 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-
-def format_timecode(seconds: float, sep: str = ":") -> str:
-    total = int(seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h:02d}{sep}{m:02d}{sep}{s:02d}"
+from media_analysis.engine.timecode import format_timecode
 
 
 class MediaFile(BaseModel):
@@ -113,73 +108,3 @@ class VisualScan(BaseModel):
                 f"{s.file_id} | {s.index} | {format_timecode(s.start)}-{format_timecode(s.end)} | {s.kind} | {s.edge_density:.3f}"
             )
         return "\n".join(lines)
-
-
-class SuggestedTemplate(BaseModel):
-    """A template Claude proposes when none of the existing ones fits."""
-
-    id: str
-    name: str
-    description: str
-    signals: list[str] = []
-    evidence: list[str] = []
-    sections: list[str] = []
-
-
-class Classification(BaseModel):
-    template_id: str | None
-    """The template the report uses."""
-    confidence: float
-    reason: str
-    closest: list[str] = []
-    mismatch: list[str] = []
-    """When no template fits: key points why the closest templates don't fit."""
-    suggested: SuggestedTemplate | None = None
-    fallback: bool = False
-    """True when no template fit and the generic template was used."""
-    forced: bool = False
-
-
-class EvidenceRequest(BaseModel):
-    file_id: str
-    start: float
-    end: float
-    reason: str
-    look_for: str
-    priority: int = 2
-
-
-class FramePlan(BaseModel):
-    requests: list[EvidenceRequest]
-
-
-class FrameCandidate(BaseModel):
-    id: str
-    file_id: str
-    time: float
-    request_index: int
-    path: str
-    sharpness: float
-
-
-class Candidates(BaseModel):
-    candidates: list[FrameCandidate]
-
-
-class EvidenceItem(BaseModel):
-    id: str
-    file_id: str
-    time: float
-    path: str
-    caption: str
-    description: str
-    text: str
-
-
-class Evidence(BaseModel):
-    items: list[EvidenceItem]
-
-
-class ReportDraft(BaseModel):
-    title: str
-    markdown: str

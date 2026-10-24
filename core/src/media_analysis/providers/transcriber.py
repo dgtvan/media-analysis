@@ -7,9 +7,8 @@ from collections.abc import Callable
 
 import numpy as np
 
-from media_analysis.config import USER_MODELS_DIR, TranscriptionSettings
-from media_analysis.core.models import TranscriptSegment
-from media_analysis.hardware import Hardware
+from media_analysis.engine.hardware import Hardware
+from media_analysis.engine.settings import USER_MODELS_DIR, TranscriptionSettings
 
 SAMPLE_RATE = 16000
 
@@ -56,8 +55,8 @@ class FasterWhisperTranscriber:
         audio: np.ndarray,
         offset: float,
         on_progress: Callable[[float], None] | None = None,
-    ) -> tuple[str | None, list[TranscriptSegment]]:
-        """Transcribe one chunk; returned times are shifted by `offset` seconds."""
+    ) -> tuple[str | None, list[tuple[float, float, str]]]:
+        """Transcribe one chunk into (start, end, text) segments; times are shifted by `offset` seconds."""
         model = self._load()
         segments, info = model.transcribe(
             audio,
@@ -69,11 +68,11 @@ class FasterWhisperTranscriber:
             # Feeding previous text back in tends to cause repetition loops on long or mixed-language audio.
             condition_on_previous_text=False,
         )
-        out: list[TranscriptSegment] = []
+        out: list[tuple[float, float, str]] = []
         for seg in segments:
             text = seg.text.strip()
             if text:
-                out.append(TranscriptSegment(start=offset + seg.start, end=offset + seg.end, text=text))
+                out.append((offset + seg.start, offset + seg.end, text))
             if on_progress:
                 on_progress(seg.end)
         return info.language, out

@@ -1,4 +1,4 @@
-"""Write the deliverable: report.md plus only the frames and extracted text the report actually references."""
+"""Stage 'assemble': writes the deliverable, report.md plus only the frames and extracted text the report references."""
 
 from __future__ import annotations
 
@@ -7,11 +7,29 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from media_analysis.core.models import Classification, Evidence, EvidenceItem, Ingest, ReportDraft, format_timecode
-from media_analysis.templates.registry import Template, render_template
+from media_analysis.engine.timecode import format_timecode
+from media_analysis.engine.workflow import Stage
+from media_analysis.understand.models import Ingest
+from media_analysis.workflows.report.models import Classification, Evidence, EvidenceItem, ReportDraft
+from media_analysis.workflows.report.templates.registry import Template, render_template
 
 _EVIDENCE_IMAGE = re.compile(r"!\[([^\]]*)\]\(evidence:([A-Za-z0-9_-]+)\)")
 _EVIDENCE_ANY = re.compile(r"\(evidence:([A-Za-z0-9_-]+)\)")
+
+
+class AssembleStage(Stage):
+    name = "assemble"
+
+    def run(
+        self, output_dir: Path, draft: ReportDraft, evidence: Evidence, ingest: Ingest, template: Template,
+        classification: Classification,
+    ) -> tuple[Path, list[str]]:
+        self.rep.started("writing output folder")
+        report_path, warnings = assemble_output(output_dir, draft, evidence, ingest, template, classification)
+        for w in warnings:
+            self.rep.warning(w)
+        self.rep.done(str(report_path))
+        return report_path, warnings
 
 
 def _safe_stem(name: str) -> str:

@@ -1,113 +1,33 @@
-"""Command-line interface: a thin layer that renders pipeline events with Rich."""
+"""Command-line interface: runs a workflow and renders its events (cli/sinks.py)."""
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-import time
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
-from rich.progress import (
-    BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn, TimeElapsedColumn,
-)
 from rich.table import Table
 
-from media_analysis.config import USER_TEMPLATES_DIR, Settings
-from media_analysis.core.pipeline import STAGES, Pipeline, RunOptions
-from media_analysis.errors import MediaAnalysisError
-from media_analysis.events import Event, EventKind
+from media_analysis.cli.sinks import ConsoleSink, JsonSink
+from media_analysis.engine.errors import MediaAnalysisError
+from media_analysis.engine.settings import USER_TEMPLATES_DIR, Settings
+from media_analysis.workflows.report.workflow import ReportOptions, ReportWorkflow
+
+STAGES = ReportWorkflow.stage_names()
 
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
-app = typer.Typer(add_completion=False, no_args_is_help=True, help="Turn a folder of recordings into a report.")
+app = typer.Typer(add_completion=False, no_args_is_help=True, help="Analyse folders of video and audio.")
 templates_app = typer.Typer(no_args_is_help=True, help="List or create report templates.")
 app.add_typer(templates_app, name="templates")
 console = Console()
 
 
-class ConsoleSink:
-    """One line per stage, plus a live line (spinner, status, progress bar, elapsed time) while a stage runs."""
-
-    def __init__(self, console: Console, verbose: bool) -> None:
-        self.console = console
-        self.verbose = verbose
-        self.live: Progress | None = None
-        self.task: TaskID | None = None
-
-    def _ensure_live(self, description: str) -> Progress:
-        if self.live is None:
-            self.live = Progress(
-                SpinnerColumn(), TextColumn("{task.description}"), BarColumn(), TaskProgressColumn(),
-                TimeElapsedColumn(), console=self.console, transient=True,
-            )
-            self.live.start()
-            self.task = self.live.add_task(description, total=None)
-        return self.live
-
-    def _close_live(self) -> None:
-        if self.live:
-            self.live.stop()
-            self.live = None
-
-    def __call__(self, e: Event) -> None:
-        if e.kind == EventKind.PROGRESS:
-            live = self._ensure_live(e.message or e.stage)
-            extra = {"description": e.message} if e.message else {}
-            live.update(self.task, completed=e.completed, total=e.total, **extra)
-        elif e.kind == EventKind.ACTIVITY:
-            self._ensure_live(e.message).update(self.task, description=e.message)
-        elif e.kind == EventKind.STAGE_STARTED:
-            self._close_live()
-            self.console.print(f"[bold cyan]▶ {e.stage}[/] {e.message}")
-            self._ensure_live(e.message or e.stage)
-        elif e.kind in (EventKind.STAGE_DONE, EventKind.STAGE_SKIPPED):
-            self._close_live()
-            if e.kind == EventKind.STAGE_DONE:
-                self.console.print(f"[green]✓ {e.stage}[/] {e.message}".rstrip())
-            else:
-                self.console.print(f"[dim]✓ {e.stage}: {e.message}[/]")
-        elif e.kind == EventKind.WARNING:
-            self.console.print(f"[yellow]  ! {e.message}[/]")
-        elif e.kind == EventKind.SUMMARY:
-            self._close_live()
-            self.console.print(f"\n[dim]{e.message}[/]", highlight=False)
-        elif e.kind == EventKind.INFO and self.verbose:
-            self.console.print(f"[dim]  {e.message}[/]")
-
-    def close(self) -> None:
-        self._close_live()
-
-
-class JsonSink:
-    """JSON Lines on stdout, one object per event, for scripts and other programs driving the app."""
-
-    def __init__(self) -> None:
-        self.started = time.monotonic()
-
-    def emit(self, data: dict) -> None:
-        data = {
-            "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "elapsed": round(time.monotonic() - self.started, 1),
-            **data,
-        }
-        sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
-
-    def __call__(self, e: Event) -> None:
-        self.emit(e.to_dict())
-
-    def close(self) -> None:
-        pass
-
-
-@app.command()
-def run(
+def report(
     input_dir: Annotated[Path, typer.Argument(help="Folder with the video/audio files to analyse.")],
     output_dir: Annotated[Path, typer.Argument(help="Folder to write the report into (new, empty, or a previous output).")],
     template: Annotated[Optional[str], typer.Option("--template", "-t", help="Use this template instead of detecting one.")] = None,
@@ -159,7 +79,7 @@ def run(
 
     sink: ConsoleSink | JsonSink = JsonSink() if json_output else ConsoleSink(console, verbose)
     try:
-        result = Pipeline(settings, sink).run(RunOptions(
+        result = ReportWorkflow(settings, sink).run(ReportOptions(
             input_dir=input_dir, output_dir=output_dir, template_id=template, force_from=force, clean_cache=clean_cache,
             project_name=project_name, log_file=log_file, fresh=fresh,
         ))
@@ -194,13 +114,18 @@ def run(
         console.print(f"Processing type: {c.template_id}" + ("" if c.forced else f" ({c.reason})"))
 
 
+app.command("report")(report)
+# The name used before the core had more than one workflow; older Windows app builds still call it.
+app.command("run", hidden=True)(report)
+
+
 @app.command()
 def doctor(
     check_claude: Annotated[bool, typer.Option(help="Also make one small Claude call to confirm the login works.")] = False,
     claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to check.")] = None,
 ) -> None:
     """Check ffmpeg, GPU/CPU, whisper and Claude access."""
-    from media_analysis.hardware import detect
+    from media_analysis.engine.hardware import detect
     from media_analysis.media import ffmpeg
 
     ok = True
@@ -260,7 +185,7 @@ def templates_list(
     templates_dir: Annotated[Optional[list[Path]], typer.Option(help="Extra folder(s) with user templates.")] = None,
 ) -> None:
     """Show available templates (built-in and user)."""
-    from media_analysis.templates.registry import load_templates
+    from media_analysis.workflows.report.templates.registry import load_templates
 
     try:
         templates = load_templates([*(templates_dir or []), USER_TEMPLATES_DIR])
@@ -281,7 +206,7 @@ def templates_new(
     directory: Annotated[Path, typer.Option("--dir", help="Where to create it.")] = USER_TEMPLATES_DIR,
 ) -> None:
     """Create a template file to fill in."""
-    from media_analysis.templates.registry import new_template
+    from media_analysis.workflows.report.templates.registry import new_template
 
     try:
         path = new_template(template_id, directory)

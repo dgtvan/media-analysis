@@ -1,7 +1,8 @@
 import numpy as np
 import cv2
 
-from media_analysis.media import vision
+from media_analysis.media import segmentation
+from media_analysis.media.frames import blur, changed_pixels, dhash, hamming
 
 H, W = 180, 320
 
@@ -22,20 +23,20 @@ def camera(t: int) -> np.ndarray:
     return img
 
 
-def run(frames: list[np.ndarray]) -> list[vision.RawSegment]:
-    p = vision.ScanParams()
-    blurred = [vision.blur(f) for f in frames]
-    motion = [0.0] + [float(vision.changed_pixels(b, a, p.pixel_threshold).mean()) for a, b in zip(blurred, blurred[1:])]
+def run(frames: list[np.ndarray]) -> list[segmentation.RawSegment]:
+    p = segmentation.ScanParams()
+    blurred = [blur(f) for f in frames]
+    motion = [0.0] + [float(changed_pixels(b, a, p.pixel_threshold).mean()) for a, b in zip(blurred, blurred[1:])]
     bh, bw = H // p.block, W // p.block
     blocks = [np.zeros((bh, bw), bool)]
     for a, b in zip(blurred, blurred[1:]):
-        c = vision.changed_pixels(b, a, p.pixel_threshold)
+        c = changed_pixels(b, a, p.pixel_threshold)
         blocks.append(c[: bh * p.block, : bw * p.block].reshape(bh, p.block, bw, p.block).any(axis=(1, 3)))
     hists = []
     for f in frames:
         h = cv2.calcHist([f], [0], None, [32], [0, 256])
         hists.append(cv2.normalize(h, h).flatten())
-    return vision.segment_frames(np.array(frames), np.array(motion), np.array(blocks), hists, p)
+    return segmentation.segment_frames(np.array(frames), np.array(motion), np.array(blocks), hists, p)
 
 
 def test_ticking_clock_does_not_split_a_slide():
@@ -58,5 +59,5 @@ def test_camera_then_slide():
 
 def test_dhash_and_hamming():
     a = slide(4)
-    assert vision.hamming(vision.dhash(a), vision.dhash(a.copy())) == 0
-    assert vision.hamming(vision.dhash(a), vision.dhash(camera(0))) > 4
+    assert hamming(dhash(a), dhash(a.copy())) == 0
+    assert hamming(dhash(a), dhash(camera(0))) > 4

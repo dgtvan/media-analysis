@@ -4,7 +4,7 @@ Speech comes from Windows text-to-speech (System.Speech), so this script runs on
 The video has a camera-like section (moving shapes), a diagram slide, a code slide that gains one line midway,
 and an action-items slide, with a ticking clock in the corner to exercise the volatile-region masking.
 
-Usage: uv run python tests/make_sample.py <output-folder>
+Usage: uv run --project core python core/tests/fixtures/make_sample.py <output-folder>
 """
 
 from __future__ import annotations

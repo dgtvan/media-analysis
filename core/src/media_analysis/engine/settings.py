@@ -21,10 +21,6 @@ USER_TEMPLATES_DIR = USER_HOME / "templates"
 USER_MODELS_DIR = USER_HOME / "models" if sys.platform == "win32" else None
 """Where a model goes when the shared folder can't take it (None = Hugging Face's default cache)."""
 
-VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts"}
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr"}
-
-
 class TranscriptionSettings(BaseModel):
     model: str = "large-v3"
     device: Literal["auto", "cpu", "cuda"] = "auto"
@@ -79,5 +75,5 @@ class Settings(BaseModel):
     templates_dirs: list[Path] = Field(default_factory=lambda: [USER_TEMPLATES_DIR])
     stats_file: Path | None = Field(
         default_factory=lambda: USER_HOME / "stats" / "runs.jsonl",
-        description="Where each run appends one JSON line for statistics (see core/perf.py). None = don't record.",
+        description="Where each run appends one JSON line for statistics (see engine/perf.py). None = don't record.",
     )

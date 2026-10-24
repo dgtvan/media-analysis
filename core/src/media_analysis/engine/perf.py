@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from media_analysis import __version__
-from media_analysis.config import Settings
-from media_analysis.core.models import Classification, MediaFile, format_timecode
-from media_analysis.events import Event, EventKind, EventSink
-from media_analysis.providers.llm import Usage
+from media_analysis.engine.events import Event, EventKind, EventSink
+from media_analysis.engine.settings import Settings
+from media_analysis.engine.timecode import format_timecode
+from media_analysis.engine.usage import Usage
 
 
 @dataclass
@@ -125,26 +125,53 @@ class StageTimer:
         return Event(EventKind.SUMMARY, "summary", "\n".join(lines), data=data)
 
 
+class TimedLLM:
+    """Passes Claude calls through to the real client and records how long each took and the tokens it used."""
+
+    def __init__(self, inner: Any, timer: StageTimer) -> None:
+        self._inner = inner
+        self._timer = timer
+        self.model = inner.model
+        self.effort = inner.effort
+        self.last_usage = None
+
+    def _call(self, fn):
+        started = time.monotonic()
+        self._inner.last_usage = None
+        try:
+            return fn()
+        finally:
+            self.last_usage = self._inner.last_usage
+            self._timer.add_claude_call(time.monotonic() - started, self.last_usage)
+
+    def generate_json(self, system, content, schema, on_activity=None):
+        return self._call(lambda: self._inner.generate_json(system, content, schema, on_activity))
+
+    def generate_text(self, system, content, on_activity=None):
+        return self._call(lambda: self._inner.generate_text(system, content, on_activity))
+
+
 RUN_RECORD_SCHEMA = 1
 
 
 def run_record(
     *,
+    workflow: str,
     started: datetime,
     input_dir: Path,
     output_dir: Path,
     summary: Event,
     settings: Settings,
-    files: list[MediaFile],
-    classification: Classification | None,
-    evidence_count: int | None,
     error: str | None,
+    fields: dict[str, Any],
+    settings_fields: dict[str, Any],
     project_name: str | None = None,
     log_file: Path | None = None,
     fresh: bool = False,
     force_from: str | None = None,
 ) -> dict[str, Any]:
-    """One analysis run as a flat, stable JSON object for statistics (one line per run in the stats file)."""
+    """One run as a flat, stable JSON object for statistics (one line per run in the stats file). `fields` and
+    `settings_fields` are what the workflow adds (media, template, ...)."""
     data = summary.data or {}
     llm = settings.llm
     return {
@@ -155,6 +182,7 @@ def run_record(
         "outcome": "failed" if data.get("failed") else "succeeded",
         "error": error,
         "app_version": __version__,
+        "workflow": workflow,
         "project": {
             "name": input_dir.name, "display_name": project_name or input_dir.name,
             "input_dir": str(input_dir), "output_dir": str(output_dir),
@@ -162,25 +190,12 @@ def run_record(
         "log_file": str(log_file) if log_file else None,
         "fresh": fresh,
         "force_from": force_from,
-        "media": {
-            "files": [
-                {"name": f.name, "fingerprint": f.fingerprint, "seconds": round(f.duration, 1), "has_video": f.has_video,
-                 "has_audio": f.has_audio, "speaker": f.speaker}
-                for f in files
-            ],
-            "video_seconds": round(sum(f.duration for f in files if f.has_video), 1),
-            "audio_seconds": data.get("audio_seconds"),
-        },
-        "template": None if classification is None else {
-            "id": classification.template_id, "generic": classification.fallback, "forced": classification.forced,
-            "confidence": classification.confidence,
-        },
-        "evidence_count": evidence_count,
+        **fields,
         "settings": {
             "backend": llm.backend, "model": llm.model, "effort": llm.effort,
             "claude_profile": str(llm.profile_dir()) if llm.backend == "subscription" else None,
             "whisper_model": settings.transcription.model, "device": settings.transcription.device,
-            "language": settings.transcription.language, "max_frames": settings.evidence.max_requests,
+            "language": settings.transcription.language, **settings_fields,
         },
         "total_seconds": data.get("total_seconds"),
         "transcribe_speed": data.get("transcribe_speed"),

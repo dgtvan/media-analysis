@@ -12,7 +12,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from media_analysis.errors import MediaAnalysisError
+from media_analysis.engine.errors import MediaAnalysisError
 
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL)
@@ -54,7 +54,7 @@ def parse_template(text: str, source: str) -> Template:
 
 def load_templates(user_dirs: list[Path]) -> dict[str, Template]:
     templates: dict[str, Template] = {}
-    builtin = resources.files("media_analysis.templates") / "builtin"
+    builtin = resources.files("media_analysis.workflows.report.templates") / "builtin"
     for entry in sorted(builtin.iterdir(), key=lambda e: e.name):
         if entry.name.endswith(".md"):
             t = parse_template(entry.read_text(encoding="utf-8"), f"built-in:{entry.name}")

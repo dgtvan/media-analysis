@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from media_analysis.errors import MediaAnalysisError
+from media_analysis.engine.errors import MediaAnalysisError
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 

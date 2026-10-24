@@ -1,4 +1,4 @@
-"""Progress events emitted by the pipeline, so any front end (CLI now, UI later) can render them."""
+"""Progress events emitted by the stages, so any front end (CLI now, UI later) can render them."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ class EventKind(str, Enum):
     INFO = "info"
     WARNING = "warning"
     SUMMARY = "summary"
-    """Sent once at the end of a run, also after a failure: how long each stage took (see core/perf.py)."""
+    """Sent once at the end of a run, also after a failure: how long each stage took (see engine/perf.py)."""
 
 
 @dataclass(frozen=True)
