@@ -8,6 +8,7 @@ $AppName   = 'Media Analysis'
 $ExeName   = "$AppId.exe"
 $Publisher = 'VanDang'
 $Repo      = Split-Path -Parent $PSScriptRoot
+$Core      = Join-Path $Repo 'core'
 $Dist      = Join-Path $Repo 'dist'
 $Root      = Join-Path $env:LOCALAPPDATA "$Publisher\$AppId"
 $AppDir    = Join-Path $Root 'app'

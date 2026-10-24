@@ -32,17 +32,17 @@ try {
 
     Write-Step 'Adding the analysis core'
     $coreDir = Join-Path $Dist 'core'
-    & robocopy (Join-Path $Repo 'src\media_analysis') (Join-Path $coreDir 'media_analysis') /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP | Out-Null
+    & robocopy (Join-Path $Core 'src\media_analysis') (Join-Path $coreDir 'media_analysis') /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Copying the core failed (robocopy exit code $LASTEXITCODE)." }
     $uv = Find-Tool 'uv' 'astral-sh.uv*\uv.exe' 'astral-sh.uv'
     # The installed app never writes into its folder, so the bytecode ships with the build. The development
     # environment uses the same Python version (.python-version) as the shared runtime.
-    Invoke-Checked $uv @('run', '--project', $Repo, '--frozen', '--quiet', 'python', '-m', 'compileall', '-q', $coreDir)
+    Invoke-Checked $uv @('run', '--project', $Core, '--frozen', '--quiet', 'python', '-m', 'compileall', '-q', $coreDir)
 
     # The runtime this build needs. One environment per (Python version, locked requirements), shared by every build
     # that doesn't change dependencies.
-    $pyVersion = (Get-Content (Join-Path $Repo '.python-version') -TotalCount 1).Trim()
-    $requirements = (& $uv export --project $Repo --frozen --no-dev --all-extras --no-emit-project --no-hashes --no-header --quiet) -join "`n"
+    $pyVersion = (Get-Content (Join-Path $Core '.python-version') -TotalCount 1).Trim()
+    $requirements = (& $uv export --project $Core --frozen --no-dev --all-extras --no-emit-project --no-hashes --no-header --quiet) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw 'uv export failed; is uv.lock up to date?' }
     $envId = (Get-Sha256 "$pyVersion`n$requirements").Substring(0, 12)
     $envDir = Join-Path $EnvsDir $envId
