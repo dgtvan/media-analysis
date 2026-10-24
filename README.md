@@ -1,8 +1,18 @@
 # media-analysis
 
-Turn a folder of video/audio recordings into one Markdown report. The app transcribes the speech, works out what kind
-of recording it is (meeting, technical discussion, lecture, interview, language practice, casual chat, or your own
-template), picks the moments where the picture matters, and writes a report that embeds those frames as evidence.
+A core that analyses folders of video and audio (what is said, what is shown), and the apps built on it.
+
+```
+core/                    the analysis core (Python), also the media-analysis command
+apps/recording-reports/  Recording Reports, the Windows app that turns recordings into reports
+scripts/                 build, install and uninstall scripts shared by the apps
+docs/                    ARCHITECTURE.md, DEPLOYMENT.md
+```
+
+Today the core has one workflow, **report**: it turns a folder of recordings into one Markdown report. It transcribes
+the speech, works out what kind of recording it is (meeting, technical discussion, lecture, interview, language
+practice, casual chat, or your own template), picks the moments where the picture matters, and writes a report that
+embeds those frames as evidence.
 
 ```
 <output>/
@@ -39,9 +49,9 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works.
 The first run downloads the Whisper model (large-v3, about 3 GB), unless `MEDIA_ANALYSIS_MODELS_DIR` points at a
 shared copy.
 
-## Windows app
+## Recording Reports (Windows app)
 
-A Windows app (`tray/`) runs in the background with an icon in the tray and watches a **projects folder**: each
+Recording Reports (`apps/recording-reports/`) runs in the background with an icon in the tray and watches a **projects folder**: each
 subfolder is a project (one recording session). Each project's report goes to `<output folder>\<project name>`.
 
 - **Tray icon** (sound-wave bars): blue = working (an analysis runs or is queued), amber = waiting (a project has
@@ -65,18 +75,18 @@ subfolder is a project (one recording session). Each project's report goes to `<
   right-click menu or with the Delete key. Double-click opens the report, if there is one. One analysis runs at a time; others
   queue. Stopping is cheap: analysing again continues from the cache. An ignored project no longer counts as waiting
   and is never started automatically. Filter, search, and *Analyse all not analysed* sit above the grid.
-- **Logs**: each analysis is logged from its first line to `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\logs`, ending with a
+- **Logs**: each analysis is logged from its first line to `%LOCALAPPDATA%\VanDang\RecordingReports\data\logs`, ending with a
   performance summary (time per step, cached or not, transcription speed, Claude calls and tokens per step). Each
   Claude call is logged with its time and tokens (input, from cache, output, and the cost at API rates as reported by
   Claude Code; with the subscription that cost is only an estimate). The log window follows a running analysis live
   and has a readable and a full view.
 - **Run statistics**: every analysis that finishes or fails appends one JSON line to
-  `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\stats\runs.jsonl` (see [Run statistics](#run-statistics)). An analysis
+  `%LOCALAPPDATA%\VanDang\RecordingReports\data\stats\runs.jsonl` (see [Run statistics](#run-statistics)). An analysis
   you stop isn't recorded.
 - **Config tab**: projects and output folders, *Analyse new projects automatically*, transcription model, spoken
   language, Claude profile (which Claude Code login and subscription analyses use; logged in each analysis), Claude
-  thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\settings.json`).
-- **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\VanDang\MediaAnalysis\data\templates`), with *New*, *Open* and
+  thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\VanDang\RecordingReports\data\settings.json`).
+- **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\VanDang\RecordingReports\data\templates`), with *New*, *Open* and
   *Copy to my templates*.
 - **Automatic analysis** (off by default): projects added after you turn it on are queued once their files have
   stopped changing for 2 minutes (shown as *New: starts once its files stop changing*). Existing projects are left
@@ -90,7 +100,7 @@ continues that analysis when it starts again, followed by the projects that were
 *Remove from queue*) drops a project. With automatic analysis on, projects added while the app was closed are picked
 up as well. It counts as **busy** while an analysis runs or is queued: an install then leaves it
 running and asks to be run again later. Results (outcome,
-elapsed time, log) are kept in `%LOCALAPPDATA%\VanDang\MediaAnalysis\data\history.json`, so they survive restarts.
+elapsed time, log) are kept in `%LOCALAPPDATA%\VanDang\RecordingReports\data\history.json`, so they survive restarts.
 
 ### Meeting Recorder folders
 
@@ -105,18 +115,22 @@ Python, libraries, ffmpeg and Whisper model kept outside the install so builds s
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```
-deploy.cmd           # build, uninstall, install: installs and starts the tray app, puts `media-analysis` on PATH
-uninstall.cmd        # removes the app; settings, templates, logs and reports are kept
-media-analysis run <input-folder> <output-folder>
+apps\recording-reports\deploy.cmd      # build, uninstall, install: installs and starts the app, puts `media-analysis` on PATH
+apps\recording-reports\uninstall.cmd   # removes the app; settings, templates, logs and reports are kept
+media-analysis report <input-folder> <output-folder>
 ```
 
 ## Usage
 
+From `core/`:
+
 ```
 uv sync
 uv run media-analysis doctor --check-claude
-uv run media-analysis run <input-folder> <output-folder>
+uv run media-analysis report <input-folder> <output-folder>
 ```
+
+`run` still works as another name for `report`.
 
 Useful options:
 
@@ -147,10 +161,10 @@ Programs can follow a run in two ways:
 - **Python:** pass a callback that receives `Event` objects:
 
   ```python
-  from media_analysis.config import Settings
-  from media_analysis.core.pipeline import Pipeline, RunOptions
+  from media_analysis.engine.settings import Settings
+  from media_analysis.workflows.report.workflow import ReportOptions, ReportWorkflow
 
-  result = Pipeline(Settings(), sink=lambda e: print(e.to_dict())).run(RunOptions(input_dir=..., output_dir=...))
+  result = ReportWorkflow(Settings(), sink=lambda e: print(e.to_dict())).run(ReportOptions(input_dir=..., output_dir=...))
   ```
 
 Rough timing on CPU: about 1.2× the audio length with large-v3, 0.8× with large-v3-turbo; the Claude steps add a few
@@ -166,6 +180,7 @@ Each run appends one JSON object per line to `<data folder>/stats/runs.jsonl` (t
 | `run_id`, `started`, `finished` | Unique id; UTC times |
 | `outcome`, `error` | `succeeded` or `failed`, and the error message |
 | `app_version` | Core version |
+| `workflow` | The workflow that ran (`report`) |
 | `project` | `name` (folder), `display_name` (the name in the app), `input_dir`, `output_dir` |
 | `fresh`, `force_from` | Whether the run started from scratch (`--fresh`), or the stage `--force` redid from |
 | `log_file` | The run's log (the app's log for this analysis; null from the command line unless `--log-file` is given) |
@@ -181,7 +196,7 @@ Each run appends one JSON object per line to `<data folder>/stats/runs.jsonl` (t
 import os
 import pandas as pd
 
-runs = pd.read_json(os.path.expandvars(r"%LOCALAPPDATA%\VanDang\MediaAnalysis\data\stats\runs.jsonl"), lines=True)
+runs = pd.read_json(os.path.expandvars(r"%LOCALAPPDATA%\VanDang\RecordingReports\data\stats\runs.jsonl"), lines=True)
 stages = pd.json_normalize(runs.to_dict("records"), "stages", ["run_id", ["project", "name"]])
 ```
 
@@ -189,7 +204,7 @@ stages = pd.json_normalize(runs.to_dict("records"), "stages", ["run_id", ["proje
 
 ```
 uv run media-analysis templates list
-uv run media-analysis templates new sales-call      # creates %LOCALAPPDATA%\VanDang\MediaAnalysis\data\templates\sales-call.md
+uv run media-analysis templates new sales-call      # creates %LOCALAPPDATA%\VanDang\RecordingReports\data\templates\sales-call.md
 ```
 
 A template is a Markdown file with YAML front matter (`id`, `name`, `description`, `signals`, `evidence`, `sections`)
@@ -204,6 +219,7 @@ one of the closest templates) and analyse again. The transcript and scan are reu
 ## Development
 
 ```
-uv run pytest
-uv run python tests/make_sample.py <folder>    # synthetic test video (Windows text-to-speech)
+uv run --project core pytest
+uv run --project core python core/tests/fixtures/make_sample.py <folder>    # synthetic test video (Windows text-to-speech)
+dotnet test apps/recording-reports
 ```

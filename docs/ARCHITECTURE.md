@@ -1,20 +1,22 @@
 # Architecture
 
-Media Analysis turns a folder of recordings (video and/or audio of one session) into a report folder: a Markdown
-report written to a matching template, plus the frames and the text read from them that back the report up.
+The repo holds an analysis core and the Windows apps built on it. The core first works out what is in a folder of
+video and audio (the speech, what is on screen); a **workflow** then turns that into a result. Today there is one
+workflow, **report**, and one app, **Recording Reports**: a folder of recordings of one session becomes a report
+folder, a Markdown report written to a matching template plus the frames and the text read from them that back the
+report up.
 
-It has two parts:
-
-- **The core** (`src/media_analysis`, Python): the analysis pipeline. It runs as a command-line program and knows
-  nothing about the Windows app.
-- **The Windows app** (`tray/`, .NET 10 WinForms): a tray app that watches a projects folder, runs the core for each
-  project and shows status, logs and settings. It starts the core as a child process and reads its progress.
+- **The core** (`core/src/media_analysis`, Python): the workflows and the shared understanding stages. It runs as a
+  command-line program and knows nothing about the apps.
+- **Recording Reports** (`apps/recording-reports`, .NET 10 WinForms): a tray app that watches a projects folder, runs
+  the core's report workflow for each project and shows status, logs and settings. It starts the core as a child
+  process and reads its progress.
 
 ```
-                  Windows app (tray/)                                  Core (src/media_analysis)
+           Recording Reports (apps/recording-reports)                  Core (core/src/media_analysis)
   ┌──────────────────────────────────────────┐   starts, per project   ┌────────────────────────────────┐
-  │ TrayApp ── watches the projects folder   │ ──────────────────────► │ cli.py run <in> <out> --json   │
-  │ MainForm ─ projects grid, Config, ...    │                         │   └─ Pipeline (9 stages)       │
+  │ TrayApp ── watches the projects folder   │ ──────────────────────► │ report <in> <out> --json       │
+  │ MainForm ─ projects grid, Config, ...    │                         │   └─ ReportWorkflow (9 stages) │
   │ AnalysisRunner ─ queue, one run at a time│ ◄────────────────────── │        ├─ faster-whisper       │
   │ RunHistory, logs, MediaDurations         │   JSON events (stdout)  │        ├─ ffmpeg / OpenCV      │
   └──────────────────────────────────────────┘                         │        └─ Claude (Agent SDK)   │
@@ -52,35 +54,57 @@ How it is built, installed and updated is in [DEPLOYMENT.md](DEPLOYMENT.md).
 ### 3.1 Code layout
 
 ```
-src/media_analysis/
-  cli.py              commands: run, doctor, templates list/new; console and JSON event output
-  config.py           settings (transcription, scan, evidence, Claude), data folder, media extensions
-  events.py           progress events and the Reporter helper stages use to emit them
-  errors.py           MediaAnalysisError (expected failures, with an exit code)
-  hardware.py         CPU/GPU detection
-  core/
-    pipeline.py       the Pipeline: runs the stages, caching, run record
-    models.py         Pydantic models: Ingest, Transcript, VisualScan, Classification, FramePlan, Evidence, ...
-    prompts.py        system prompts and JSON schemas for the Claude calls
-    cache.py          content-addressed cache and file fingerprints
-    assemble.py       writes report.md and reference/
-    perf.py           StageTimer (timings, Claude calls and tokens), summary, run statistics record
-  media/
-    ffmpeg.py         probe, decode audio, iterate frames, extract stills
-    vision.py         visual segmentation, perceptual hash, sharpness, contact sheets
-  providers/
-    transcriber.py    faster-whisper wrapper, silence-aware chunking
-    llm.py            Claude backends (subscription, api) behind one LLM interface; token usage
-  templates/
-    registry.py       loads and validates templates
-    builtin/          meeting, technical-discussion, lecture-tutorial, interview, language-practice,
-                      casual-chat, generic (fallback)
+core/
+  pyproject.toml, uv.lock
+  src/media_analysis/
+    cli/
+      app.py            commands: report (also as run), doctor, templates list/new
+      sinks.py          console and JSON event output
+    engine/             runs any workflow; knows nothing about reports
+      workflow.py       Workflow (stage order, --force, --fresh, cache, run record), Stage, RunContext
+      cache.py          content-addressed cache and file fingerprints
+      perf.py           StageTimer (timings, Claude calls and tokens), TimedLLM, summary, run statistics record
+      events.py         progress events and the Reporter helper stages use to emit them
+      settings.py       settings (transcription, scan, evidence, Claude), data folder
+      errors.py         MediaAnalysisError (expected failures, with an exit code)
+      hardware.py       CPU/GPU detection
+      usage.py, timecode.py
+    providers/
+      transcriber.py    faster-whisper wrapper, silence-aware chunking
+      llm.py            Claude backends (subscription, api) behind one LLM interface
+    media/              local media tools, no AI
+      ffmpeg.py         probe, decode audio, iterate frames, extract stills
+      segmentation.py   visual segmentation
+      frames.py         perceptual hash, sharpness, edges, contact sheets
+    understand/         what is in the files, the same for every workflow
+      models.py         MediaFile, Ingest, Transcript, VisualScan
+      ingest.py, transcribe.py, scan.py   stages 1-3
+      sessions.py       Meeting Recorder files and their speakers
+    workflows/
+      report/
+        workflow.py     ReportWorkflow: the stage list and what it adds to the run record
+        models.py       Classification, FramePlan, Candidates, Evidence, ReportDraft
+        prompts.py      system prompts and JSON schemas for the Claude calls
+        classify.py, plan.py, extract.py, read.py, write.py, assemble.py   stages 4-9
+        templates/
+          registry.py   loads and validates templates
+          builtin/      meeting, technical-discussion, lecture-tutorial, interview, language-practice,
+                        casual-chat, generic (fallback)
+  tests/                engine/, media/, understand/, workflows/report/ (same layout), fixtures/make_sample.py
 ```
 
-The core never prints from inside the pipeline. Stages emit events; `cli.py` renders them (Rich console, or one JSON
+Imports only go one way: `cli` → `workflows` → `understand` → `media` / `providers` → `engine`. The understanding
+stages never depend on a workflow, so a new workflow (such as an edit plan for footage) reuses them as they are.
+
+A stage is a small class with a `name`, a `version` (bumped when its algorithm changes, so cached results are
+recomputed) and a `run` method that takes the earlier stages' results. Its cache key is a hash of what it depends on
+plus that version. A workflow lists its stages and runs them in `execute`; the engine around it checks the folders,
+handles `--fresh`, `--force` and `--clean-cache`, times every stage and writes the run record, also when a stage fails.
+
+The core never prints from inside a stage. Stages emit events; `cli/sinks.py` renders them (Rich console, or one JSON
 object per line with `--json`), and the Windows app reads the JSON.
 
-### 3.2 Pipeline
+### 3.2 Report workflow
 
 ```
 1 ingest ─► 2 transcribe ─► 3 scan ─► 4 classify ─► 5 plan ─► 6 extract ─► 7 read ─► 8 report ─► 9 assemble
@@ -212,27 +236,40 @@ A template is one Markdown file: YAML front matter (`id`, `name`, `description`,
 User templates live in `<data folder>/templates` and replace built-in ones with the same id. `templates new <id>`
 creates one from a skeleton.
 
-## 4. Windows app
+## 4. Recording Reports (Windows app)
 
 ### 4.1 Code layout
 
 ```
-tray/MediaAnalysis.Tray/
-  Program.cs           single-instance mutex, --data-dir, starts TrayApp
-  TrayApp.cs           tray icon and menu, watches the projects folder, close requests, IAppHost for the window
-  MainForm.cs          window: Projects grid and its menus, Config, Templates and About tabs
-  AnalysisRunner.cs    queue, starts the core per project, follows its events, writes the log
-  CoreProcess.cs       core.json (how to start the core) and the JSON event parser
-  ProjectCatalog.cs    reads the projects folder into Project records and their state
-  AutoAnalysis.cs      which new projects start on their own
-  RunHistory.cs        last result per project (history.json)
-  MediaDurations.cs    recording length per project, measured with ffprobe in the background, cached per file
-  ReportOpener.cs      opens a report in VS Code with the chosen Claude profile
-  AppSettings.cs       settings.json: folders, names, ignored projects, core options, Claude profile
-  AppPaths.cs, AppInitializer.cs   data folder layout, startup initialization and migration from older installs
-  LogWindow.cs, LogFormatter.cs    live log view (readable and full)
-  TemplateCatalog.cs, TrayIcons.cs, RunStatus.cs, BuildInfo.cs
+apps/recording-reports/
+  app.psd1, build.cmd, install.cmd, uninstall.cmd, deploy.cmd   identity and deployment (DEPLOYMENT.md)
+  RecordingReports/
+    Program.cs           single-instance mutex, --data-dir, starts TrayApp
+    App/
+      AppSettings.cs     settings.json: folders, names, ignored projects, core options, Claude profile
+      AppPaths.cs, AppInitializer.cs   data folder layout, startup initialization, copying Media Analysis' data
+      BuildInfo.cs, IAppHost.cs
+    Analysis/
+      AnalysisRunner.cs  queue, starts the core per project, follows its events, writes the log
+      CoreProcess.cs     core.json (how to start the core) and the JSON event parser
+    Projects/
+      ProjectCatalog.cs  reads the projects folder into Project records and their state
+      AutoAnalysis.cs    which new projects start on their own
+      RunHistory.cs      last result per project (history.json)
+      MediaDurations.cs  recording length per project, measured with ffprobe in the background, cached per file
+      RunStatus.cs       plain-language names for the core's stages
+    Templates/
+      TemplateCatalog.cs
+    UI/
+      TrayApp.cs         tray icon and menu, watches the projects folder, close requests, IAppHost for the window
+      MainForm.cs        window: Projects grid and its menus, Config, Templates and About tabs
+      LogWindow.cs, LogFormatter.cs    live log view (readable and full)
+      ReportOpener.cs    opens a report in VS Code with the chosen Claude profile
+      TrayIcons.cs
+  RecordingReports.Tests/  Analysis/, App/, Projects/, UI/ (same layout)
 ```
+
+Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project file imports them all.
 
 ### 4.2 How it works
 
@@ -241,7 +278,7 @@ tray/MediaAnalysis.Tray/
   makes it waiting again. The folder is rescanned when it changes and every 30 seconds.
 - **Running the core.** `core.json`, written by the build next to the exe, says which Python to run, where the core's
   code is and which environment variables to set (ffmpeg and model folders). For each analysis the app runs
-  `python -m media_analysis run <project> <output> --json` with the options from Config, the Claude profile, the log
+  `python -m media_analysis report <project> <output> --json` with the options from Config, the Claude profile, the log
   path and the project's name. One analysis runs at a time; the rest wait in a queue.
 - **Logs and history.** Each analysis gets a log in `<data folder>\logs`: a header (project, options, Claude profile),
   then every event line from the core, so the performance summary ends it. The window shows a readable view of it,
@@ -260,12 +297,12 @@ tray/MediaAnalysis.Tray/
 
 ## 5. Testing
 
-- Core: unit tests for segmentation, hashing, audio chunking, cache keys, templates, output assembly, the performance
-  summary and run records (`uv run pytest`). `tests/make_sample.py` builds a short synthetic video with Windows
-  text-to-speech for an end-to-end run.
-- Windows app: tests for the catalog, settings, auto-analysis, durations, event parsing and migration
-  (`dotnet test tray`). One test runs a real analysis through the app's runner when `MEDIA_ANALYSIS_TEST_CORE_DIR`
-  and `MEDIA_ANALYSIS_TEST_PROJECT` are set.
+- Core: unit tests for segmentation, hashing, audio chunking, cache keys, templates, classification, output assembly,
+  the performance summary and run records (`uv run --project core pytest`). `core/tests/fixtures/make_sample.py`
+  builds a short synthetic video with Windows text-to-speech for an end-to-end run.
+- Recording Reports: tests for the catalog, settings, auto-analysis, durations, event parsing and migration
+  (`dotnet test apps/recording-reports`). One test runs a real analysis through the app's runner when
+  `MEDIA_ANALYSIS_TEST_CORE_DIR` and `MEDIA_ANALYSIS_TEST_PROJECT` are set.
 
 ## 6. Possible future work
 

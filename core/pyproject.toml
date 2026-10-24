@@ -1,7 +1,7 @@
 [project]
 name = "media-analysis"
 version = "0.1.0"
-description = "Turn a folder of video/audio recordings into a template-based Markdown report with evidence frames."
+description = "Analyse folders of video and audio: transcripts, visual scans, and reports written to templates with evidence frames."
 authors = [
     { name = "Van Dang", email = "dgtvan@gmail.com" }
 ]
