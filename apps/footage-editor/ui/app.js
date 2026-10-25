@@ -127,7 +127,9 @@ async function loadEdit(version) {
   $("exportBtn").href = P.edit ? `/api/projects/${P.id}/export/edit.json${token ? `?token=${token}` : ""}` : "#";
   $("noEdit").hidden = !!P.edit;
   computeEdit();
-  renderSources(); renderTimeline(); syncPlayer(true);
+  renderSources(); renderTimeline();
+  if (layout) fpos = posOf(t);
+  syncPlayer(true); movePlayhead();
 }
 
 async function loadActivity() {
@@ -467,9 +469,12 @@ const COLORS = { video: "var(--v1)", text: "var(--text-track)", audio: "var(--au
 const trackColor = (tr) => (tr.kind === "video" && tr.id !== "V1") ? "var(--v2)" : COLORS[tr.kind];
 let pxPerSec = 12, view = "full", layout = null, selected = null, total = 0;
 let t = 0, playing = false, startWall = 0, startT = 0, sourceMode = null;
-// "Play cut parts": playback walks the full footage view; fpos is the position there (seconds from its start).
+// In the full footage view the playhead can rest anywhere, cut parts included: fpos (seconds from the view's start)
+// is then the truth. Playing the edit runs on edit time and starts from the next kept part; "Play cut parts" plays
+// the full footage view as it is.
 let playCuts = false, fpos = 0, startPos = 0;
 const fullPlay = () => playCuts && layout;
+const byPos = () => layout && (playCuts || !playing);
 
 const src = (id) => P.sources.find((s) => s.id === id);
 const main = () => P.edit?.tracks.find((x) => x.id === "V1");
@@ -494,6 +499,8 @@ function buildLayout() {
 
 function posOf(tt) {
   if (!layout) return tt;
+  // The edit's end sits just inside the last kept part, not on the cut part after it.
+  tt = Math.min(tt, total - 0.01);
   for (const b of layout.blocks) for (const it of b.items) if (tt >= it.at && tt < it.at + it.duration) return b.x0 + it.in + (tt - it.at);
   const b = layout.blocks.at(-1); if (!b) return tt;
   return b.x0 + b.items.at(-1).out;
@@ -518,9 +525,13 @@ function pieces(start, dur) {
   return out.length ? out : [[posOf(start), posOf(start) + dur]];
 }
 
-function goTo(pos) {
-  if (fullPlay()) { seekPos(pos); return; }
-  const r = hit(pos); if (r.source) playSource(r.source, r.st); else seek(r.t);
+function goTo(pos) { if (layout) seekPos(pos); else seek(pos); }
+
+// Edit time where the next kept part starts at or after a full footage view position (the edit's end if none).
+function nextKept(pos) {
+  let best = total;
+  for (const b of layout.blocks) for (const it of b.items) if (b.x0 + it.in >= pos - 1e-6) best = Math.min(best, it.at);
+  return best;
 }
 
 function filmstrip(el, s, from) {
@@ -582,15 +593,14 @@ function renderTimeline() {
         const s = src(b.source);
         const blk = document.createElement("div"); blk.className = "block";
         blk.style.left = b.x0 * pxPerSec + "px"; blk.style.width = Math.max(4, b.len * pxPerSec - 1) + "px";
-        blk.title = `${s.name}: dimmed parts are cut. Click one to play the original there.`;
+        blk.title = `${s.name}: dimmed parts are cut. Turn on "Play cut parts" to play them.`;
         if (tr.linked) blk.innerHTML = `<div class="wave"></div>`; else filmstrip(blk, s, 0);
-        blk.addEventListener("click", (e) => { const r = blk.getBoundingClientRect(); playSource(s, (e.clientX - r.left) / pxPerSec); e.stopPropagation(); });
         let from = 0;
         for (const it of [...b.items, { in: s.duration }]) {
           if (it.in > from + 0.05) {
             const cut = document.createElement("div"); cut.className = "cutpart";
             cut.style.left = from * pxPerSec + "px"; cut.style.width = (it.in - from) * pxPerSec + "px";
-            cut.title = `Cut: ${s.name} ${fmtSrc(from)}–${fmtSrc(it.in)}. Click to play it.`;
+            cut.title = `Cut: ${s.name} ${fmtSrc(from)}–${fmtSrc(it.in)}`;
             blk.appendChild(cut);
           }
           if (!it.label) break;
@@ -624,10 +634,10 @@ function renderTimeline() {
 }
 
 function movePlayhead() {
-  const x = (fullPlay() ? fpos : posOf(t)) * pxPerSec;
+  const x = (layout ? fpos : t) * pxPerSec;
   for (const p of document.querySelectorAll(".playhead")) p.style.left = x + "px";
   $("time").textContent = `${fmt(t)} / ${fmt(total)}`;
-  const cut = fullPlay() && hit(fpos);
+  const cut = byPos() && hit(fpos);
   const m = main()?.items.find((it) => t >= it.at && t < it.at + it.duration);
   $("nowClip").textContent = sourceMode ? "" : cut?.source ? `Cut part: ${cut.source.name} @ ${fmtSrc(cut.st)}`
     : m ? `Now: ${m.label} ${src(m.source)?.name} @ ${fmtSrc(m.in + t - m.at)}` : "";
@@ -661,7 +671,7 @@ function drive(el, it, force, want = it && it.in + (t - it.at)) {
 function syncPlayer(force) {
   if (sourceMode) return;
   if (!P.edit) { for (const id of ["v1", "v2"]) $(id).classList.add("hidden"); $("caption").style.display = "none"; $("badges").innerHTML = ""; return; }
-  if (fullPlay()) {
+  if (byPos()) {
     const r = hit(fpos);
     if (r.source) {
       drive($("v1"), { id: "cut", source: r.source.id }, force, r.st);
@@ -692,6 +702,7 @@ function tick() {
   } else if (playing && !sourceMode) {
     t = startT + (performance.now() - startWall) / 1000;
     if (t >= total) { t = total; setPlaying(false); }
+    if (layout) fpos = posOf(t);
     syncPlayer(false);
     movePlayhead();
   }
@@ -703,7 +714,12 @@ function setPlaying(on) {
   if (!P.edit) return;
   playing = on;
   if (on && fullPlay()) { if (fpos >= layout.width) fpos = 0; startPos = fpos; startWall = performance.now(); }
-  else if (on) { if (t >= total) t = 0; startT = t; startWall = performance.now(); }
+  else if (on) {
+    if (layout && hit(fpos).source) t = nextKept(fpos);
+    if (t >= total) t = 0;
+    startT = t; startWall = performance.now();
+    if (layout) fpos = posOf(t);
+  }
   $("play").textContent = on ? "❚❚ Pause" : "▶ Play";
   syncPlayer(true);
 }
@@ -712,7 +728,7 @@ function pause() { if (playing) setPlaying(false); if (sourceMode) exitSource();
 function seek(to) {
   if (sourceMode) exitSource();
   t = Math.max(0, Math.min(total, to)); startT = t; startWall = performance.now();
-  if (fullPlay()) fpos = startPos = posOf(t);
+  if (layout) fpos = startPos = posOf(t);
   syncPlayer(true); movePlayhead();
 }
 
@@ -726,8 +742,7 @@ function setPlayCuts(on) {
   playCuts = on;
   $("playCuts").setAttribute("aria-pressed", String(on));
   if (on && view !== "full") { view = $("view").value = "full"; renderTimeline(); }
-  if (on && layout) fpos = startPos = posOf(t);
-  startT = t; startWall = performance.now();
+  startPos = fpos; startT = t; startWall = performance.now();
   syncPlayer(true); movePlayhead();
 }
 
@@ -756,25 +771,11 @@ $("play").addEventListener("click", () => setPlaying(sourceMode ? $("src").pause
 $("backToEdit").addEventListener("click", exitSource);
 $("src").addEventListener("ended", () => { $("play").textContent = "▶ Play"; });
 $("zoom").addEventListener("input", (e) => { pxPerSec = Number(e.target.value); renderTimeline(); });
-$("view").addEventListener("change", (e) => { view = e.target.value; renderTimeline(); if (view !== "full" && playCuts) setPlayCuts(false); });
+$("view").addEventListener("change", (e) => { view = e.target.value; renderTimeline(); if (layout) fpos = posOf(t); if (view !== "full" && playCuts) setPlayCuts(false); });
 $("playCuts").addEventListener("click", () => setPlayCuts(!playCuts));
 $("lanesWrap").addEventListener("scroll", (e) => { $("rulerWrap").scrollLeft = e.target.scrollLeft; $("headers").scrollTop = e.target.scrollTop; });
 $("rulerWrap").addEventListener("click", (e) => { if (scrubbed) return; const r = $("ruler").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
 $("lanes").addEventListener("click", (e) => { if (scrubbed) return; const r = $("lanes").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
-
-// Edit time at a timeline position; over a cut part (full footage view) the nearest kept moment.
-function editTimeAt(pos) {
-  if (!layout) return Math.max(0, Math.min(total, pos));
-  const r = hit(pos);
-  if (r.t != null) return r.t;
-  let best = total, gap = Infinity;
-  for (const b of layout.blocks) for (const it of b.items) {
-    const x1 = b.x0 + it.in, x2 = b.x0 + it.out;
-    if (Math.abs(pos - x1) < gap) { gap = Math.abs(pos - x1); best = it.at; }
-    if (Math.abs(pos - x2) < gap) { gap = Math.abs(pos - x2); best = it.at + it.duration; }
-  }
-  return best;
-}
 
 // Drag the playhead to scrub; playback resumes on release if it was playing. The timeline scrolls near its edges.
 let scrubbed = false;
@@ -789,7 +790,7 @@ for (const host of ["ruler", "lanes"]) $(host).addEventListener("pointerdown", (
     const w = wrap.getBoundingClientRect();
     if (ev.clientX > w.right - 30) wrap.scrollLeft += 20; else if (ev.clientX < w.left + 30) wrap.scrollLeft -= 20;
     const pos = (ev.clientX - $("lanes").getBoundingClientRect().left) / pxPerSec;
-    if (fullPlay()) seekPos(pos); else seek(editTimeAt(pos));
+    goTo(pos);
   };
   const up = () => {
     window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
