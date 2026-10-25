@@ -119,6 +119,195 @@ app.command("report")(report)
 app.command("run", hidden=True)(report)
 
 
+def _claude(settings: Settings, backend: str | None, claude_model: str | None, effort: str | None,
+            claude_profile: Path | None) -> None:
+    if backend:
+        if backend not in ("subscription", "api"):
+            raise typer.BadParameter("must be subscription or api", param_hint="--backend")
+        settings.llm.backend = backend  # type: ignore[assignment]
+    if claude_model:
+        settings.llm.model = claude_model
+    if effort:
+        if effort not in EFFORT_LEVELS:
+            raise typer.BadParameter(f"must be one of: {', '.join(EFFORT_LEVELS)}", param_hint="--effort")
+        settings.llm.effort = effort  # type: ignore[assignment]
+    if claude_profile:
+        settings.llm.claude_profile = claude_profile
+
+
+def _fail(sink: ConsoleSink | JsonSink, e: Exception) -> typer.Exit:
+    sink.close()
+    if isinstance(e, MediaAnalysisError):
+        if isinstance(sink, JsonSink):
+            sink.emit({"event": "error", "exit_code": e.exit_code, "message": str(e)})
+        else:
+            console.print(f"\n[bold red]Error:[/] {e}")
+        return typer.Exit(e.exit_code)
+    traceback.print_exc()
+    if isinstance(sink, JsonSink):
+        sink.emit({"event": "error", "exit_code": 1, "message": f"Unexpected error: {type(e).__name__}: {e}"})
+    return typer.Exit(1)
+
+
+@app.command()
+def edit(
+    footage: Annotated[Path, typer.Argument(help="Folder with the footage (video/audio files).")],
+    project_dir: Annotated[Path, typer.Argument(help="Project folder for the analysis, proxies and edit versions.")],
+    profile: Annotated[str, typer.Option("--profile", "-p", help="Edit profile, e.g. talking-head, travel-montage.")] = "generic",
+    max_seconds: Annotated[Optional[int], typer.Option(help="Longest the proposed edit may be (overrides the profile's limit).")] = None,
+    force: Annotated[Optional[str], typer.Option(help="Redo this stage and all later ones.")] = None,
+    fresh: Annotated[bool, typer.Option(help="Delete the cache of earlier runs first.")] = False,
+    whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model.")] = None,
+    language: Annotated[Optional[str], typer.Option(help="Spoken language hint (en, vi).")] = None,
+    backend: Annotated[Optional[str], typer.Option(help="Claude access: subscription (default) or api.")] = None,
+    claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
+    effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
+    claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print progress as JSON Lines.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Analyse FOOTAGE and propose an edit in PROJECT_DIR (a new version when the suggestion changes)."""
+    from media_analysis.workflows.edit.workflow import EditOptions, EditWorkflow
+
+    if force and force not in EditWorkflow.stage_names()[1:]:
+        raise typer.BadParameter(f"must be one of: {', '.join(EditWorkflow.stage_names()[1:])}", param_hint="--force")
+    settings = Settings()
+    if whisper_model:
+        settings.transcription.model = whisper_model
+    if language:
+        settings.transcription.language = language
+    _claude(settings, backend, claude_model, effort, claude_profile)
+    sink: ConsoleSink | JsonSink = JsonSink() if json_output else ConsoleSink(console, verbose)
+    try:
+        result = EditWorkflow(settings, sink).run(EditOptions(
+            input_dir=footage, output_dir=project_dir, profile_id=profile, max_seconds=max_seconds,
+            force_from=force, fresh=fresh,
+        ))
+    except Exception as e:
+        raise _fail(sink, e) from None
+    finally:
+        sink.close()
+    seconds = result.plan.duration() / 1000
+    if isinstance(sink, JsonSink):
+        sink.emit({"event": "finished", "version": result.version.version, "seconds": round(seconds, 1),
+                   "warnings": result.warnings})
+        return
+    console.print(f"\n[bold green]Done.[/] Edit version {result.version.version}: {seconds:.1f} s. "
+                  f"See {project_dir / 'export' / 'edit.md'}")
+
+
+@app.command("edit-project")
+def edit_project(
+    project_dir: Annotated[Path, typer.Argument(help="An edit project folder (project.json lists its footage).")],
+    fresh: Annotated[bool, typer.Option(help="Delete the cache of earlier runs first.")] = False,
+    backend: Annotated[Optional[str], typer.Option(help="Claude access: subscription (default) or api.")] = None,
+    claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
+    effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
+    claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+    whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model.")] = None,
+    language: Annotated[Optional[str], typer.Option(help="Spoken language hint (en, vi).")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print progress as JSON Lines.")] = False,
+) -> None:
+    """Analyse a project's imported footage with its profile and limit, and propose an edit."""
+    from media_analysis.workflows.edit.workflow import EditOptions, EditWorkflow, load_project_info
+
+    settings = Settings()
+    if whisper_model:
+        settings.transcription.model = whisper_model
+    if language:
+        settings.transcription.language = language
+    _claude(settings, backend, claude_model, effort, claude_profile)
+    sink: ConsoleSink | JsonSink = JsonSink() if json_output else ConsoleSink(console, False)
+    try:
+        info = load_project_info(project_dir)
+        result = EditWorkflow(settings, sink).run(EditOptions(
+            input_dir=project_dir, output_dir=project_dir, profile_id=info.profile_id, max_seconds=info.max_seconds,
+            files=[Path(f) for f in (info.files or [])], fresh=fresh, project_name=info.name or None,
+        ))
+    except Exception as e:
+        raise _fail(sink, e) from None
+    finally:
+        sink.close()
+    if isinstance(sink, JsonSink):
+        sink.emit({"event": "finished", "version": result.version.version,
+                   "seconds": round(result.plan.duration() / 1000, 1), "warnings": result.warnings})
+    else:
+        console.print(f"[bold green]Done.[/] Edit version {result.version.version}.")
+
+
+@app.command()
+def serve(
+    ui: Annotated[Optional[Path], typer.Option(help="Folder with the presentation's files, served at /.")] = None,
+    port: Annotated[Optional[int], typer.Option(help="Port on 127.0.0.1. Default: a free one.")] = None,
+    token: Annotated[Optional[str], typer.Option(help="Access token. Default: a new random one.")] = None,
+    backend: Annotated[Optional[str], typer.Option(help="Claude access: subscription (default) or api.")] = None,
+    claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
+    effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
+    claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+) -> None:
+    """Run the Footage Editor's local service (Project API + the presentation) until stopped."""
+    import secrets as _secrets
+
+    from media_analysis.engine.service import EventHub, create_app, mount_ui
+    from media_analysis.engine.service import serve as run_server
+    from media_analysis.engine.settings import USER_HOME
+    from media_analysis.workflows.edit.api import EditService, mount_edit_api
+
+    def settings_factory() -> Settings:
+        s = Settings()
+        _claude(s, backend, claude_model, effort, claude_profile)
+        return s
+
+    settings_factory()  # checks the options once, up front
+    cli_args: list[str] = []
+    for name, value in (("--backend", backend), ("--claude-model", claude_model), ("--effort", effort),
+                        ("--claude-profile", claude_profile)):
+        if value:
+            cli_args += [name, str(value)]
+    token = token or _secrets.token_urlsafe(24)
+    hub = EventHub()
+    app_ = create_app(token, hub)
+    mount_edit_api(app_, EditService(USER_HOME / "projects", settings_factory, hub, cli_args))
+    mount_ui(app_, ui)
+    run_server(app_, token, port)
+
+
+@app.command()
+def chat(
+    project_dir: Annotated[Path, typer.Argument(help="An edit project folder.")],
+    message: Annotated[str, typer.Argument(help="What to change, e.g. 'make the intro shorter'.")],
+    backend: Annotated[Optional[str], typer.Option(help="Claude access: subscription (default) or api.")] = None,
+    claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
+    effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
+    claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+) -> None:
+    """Ask Claude to change the current edit of PROJECT_DIR; a change becomes a new version."""
+    from media_analysis.workflows.edit.chat import EditChat
+    from media_analysis.workflows.edit.export import write_exports
+    from media_analysis.workflows.edit.workflow import open_project
+
+    settings = Settings()
+    _claude(settings, backend, claude_model, effort, claude_profile)
+    sink = ConsoleSink(console, False)
+    try:
+        u, profile = open_project(project_dir, settings)
+        descriptions = {f"{d.file_id}#{d.index}": d.caption for d in (u.descriptions.shots if u.descriptions else [])}
+        session = EditChat(project_dir, u.footage, u.view, profile, descriptions)
+
+        def show(e) -> None:
+            if e.kind == "tool.end":
+                console.print(f"[dim]  {e.data['tool']}: {e.data['result']}[/]")
+
+        answer, info = session.send(message, settings.llm, show)
+        if info:
+            write_exports(session.store.load(), u.ingest, info.version, project_dir / "export")
+    except Exception as e:
+        raise _fail(sink, e) from None
+    console.print(answer)
+    if info:
+        console.print(f"[green]Saved as version {info.version}.[/]")
+
+
 @app.command()
 def doctor(
     check_claude: Annotated[bool, typer.Option(help="Also make one small Claude call to confirm the login works.")] = False,

@@ -8,6 +8,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk>=0.2.172",
+    "fastapi>=0.162.0",
     "faster-whisper>=1.2.1",
     "numpy>=2.5.4",
     "opencv-python-headless>=5.0.0.93",
@@ -16,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
     "typer>=0.27.3",
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]
