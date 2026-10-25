@@ -570,18 +570,13 @@ function clipEl(tr, it, extra, labelOnly = false, frames = true) {
 }
 
 function renderTimeline() {
-  const headers = $("headers"), lanes = $("lanes"), ruler = $("ruler");
-  headers.innerHTML = ""; lanes.innerHTML = ""; ruler.innerHTML = "";
+  const headers = $("headers"), lanes = $("lanes");
+  headers.innerHTML = ""; lanes.innerHTML = "";
   if (!P.edit) return;
   layout = buildLayout();
   const span = layout ? layout.width : total;
   const width = Math.ceil((span + 5) * pxPerSec);
-  lanes.style.width = ruler.style.width = width + "px";
-  // The ruler counts edit time; in the full footage view its marks sit on the kept parts and skip the cuts.
-  const step = pxPerSec >= 30 ? 1 : pxPerSec >= 12 ? 5 : 10;
-  for (let s = 0; s <= total; s += step) {
-    const tk = document.createElement("div"); tk.className = "tick"; tk.style.left = posOf(s) * pxPerSec + "px"; tk.textContent = fmtSrc(s); ruler.appendChild(tk);
-  }
+  lanes.style.width = width + "px";
   for (const tr of P.edit.tracks) {
     const h = document.createElement("div");
     h.className = "header"; h.style.setProperty("--c", trackColor(tr));
@@ -629,7 +624,7 @@ function renderTimeline() {
     }
     lanes.appendChild(lane);
   }
-  for (const hostEl of [ruler, lanes]) { const p = document.createElement("div"); p.className = "playhead"; hostEl.appendChild(p); }
+  const p = document.createElement("div"); p.className = "playhead"; lanes.appendChild(p);
   movePlayhead();
 }
 
@@ -773,13 +768,12 @@ $("src").addEventListener("ended", () => { $("play").textContent = "▶ Play"; }
 $("zoom").addEventListener("input", (e) => { pxPerSec = Number(e.target.value); renderTimeline(); });
 $("view").addEventListener("change", (e) => { view = e.target.value; renderTimeline(); if (layout) fpos = posOf(t); if (view !== "full" && playCuts) setPlayCuts(false); });
 $("playCuts").addEventListener("click", () => setPlayCuts(!playCuts));
-$("lanesWrap").addEventListener("scroll", (e) => { $("rulerWrap").scrollLeft = e.target.scrollLeft; $("headers").scrollTop = e.target.scrollTop; });
-$("rulerWrap").addEventListener("click", (e) => { if (scrubbed) return; const r = $("ruler").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
+$("lanesWrap").addEventListener("scroll", (e) => { $("headers").scrollTop = e.target.scrollTop; });
 $("lanes").addEventListener("click", (e) => { if (scrubbed) return; const r = $("lanes").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
 
 // Drag the playhead to scrub; playback resumes on release if it was playing. The timeline scrolls near its edges.
 let scrubbed = false;
-for (const host of ["ruler", "lanes"]) $(host).addEventListener("pointerdown", (e) => {
+$("lanes").addEventListener("pointerdown", (e) => {
   if (!e.target.classList.contains("playhead") || e.button !== 0 || !P.edit) return;
   e.preventDefault(); e.stopPropagation();
   const resume = playing && !sourceMode;
@@ -800,7 +794,9 @@ for (const host of ["ruler", "lanes"]) $(host).addEventListener("pointerdown", (
   };
   window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
 });
+window.addEventListener("wheel", (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
 document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key)) e.preventDefault();
   if (e.code === "Space" && !["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName) && !$("project").hidden) { e.preventDefault(); $("play").click(); }
 });
 
@@ -809,7 +805,7 @@ function setTimelineHeight(h) {
   h = Math.max(140, Math.min(window.innerHeight - 220, h));
   $("project").style.setProperty("--tl-h", h + "px");
   const rows = P.edit ? P.edit.tracks.length : 6;
-  $("timeline").style.setProperty("--row", Math.max(28, Math.min(96, Math.floor((h - 30 - 32 - 14) / rows))) + "px");
+  $("timeline").style.setProperty("--row", Math.max(28, Math.min(96, Math.floor((h - 32 - 16 - rows) / rows))) + "px");
   localStorage.setItem("timelineHeight", h);
 }
 $("split").addEventListener("pointerdown", (e) => {

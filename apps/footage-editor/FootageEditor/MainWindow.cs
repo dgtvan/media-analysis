@@ -55,6 +55,10 @@ sealed class MainWindow : Form
                 _web.CoreWebView2.WebMessageReceived += OnWebMessage;
                 _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
                 _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
+                // The page has its own timeline zoom; browser zoom (Ctrl + wheel, Ctrl +/-, pinch) only breaks the layout.
+                _web.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                _web.CoreWebView2.Settings.IsPinchZoomEnabled = false;
+                _web.ZoomFactor = 1;
                 Controls.Add(_web);
                 _web.BringToFront();
             }

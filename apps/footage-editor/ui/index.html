@@ -97,10 +97,9 @@
       <button class="tool" id="playCuts" aria-pressed="false" title="Play the whole footage, cut parts included (Full footage view)">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5v11l9-5.5z"/><path d="M1 8h14" stroke-dasharray="2 2"/></svg>
         Play cut parts</button>
+      <span class="tl-view"><select id="view" title="Timeline view"><option value="full">Full footage</option><option value="edit">Edit only</option></select>
+        <input type="range" id="zoom" min="4" max="60" value="12" title="Zoom"></span>
     </div>
-    <div class="tl-corner"><select id="view" title="Timeline view"><option value="full">Full footage</option><option value="edit">Edit only</option></select>
-      <input type="range" id="zoom" min="4" max="60" value="12" title="Zoom"></div>
-    <div class="ruler-wrap" id="rulerWrap"><div class="ruler" id="ruler"></div></div>
     <div class="headers" id="headers"></div>
     <div class="lanes-wrap" id="lanesWrap"><div class="lanes" id="lanes"></div></div>
   </div>
