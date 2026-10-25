@@ -62,3 +62,30 @@ def test_imported_footage_gets_a_thumbnail_and_length_before_analysis(tmp_path):
     r = c.get(files[0]["thumb"], headers=h)
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and len(r.content) > 1000
     assert c.get(f"/media/{p['id']}/thumb/0123456789abcdef.jpg", headers=h).status_code == 404
+
+
+def test_events_reach_a_real_websocket_client(tmp_path):
+    import threading
+    import time
+
+    import uvicorn
+    from websockets.sync.client import connect
+
+    from media_analysis.engine.service import free_port
+
+    hub = EventHub()
+    app = create_app("secret", hub)
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    threading.Thread(target=server.run, daemon=True).start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        with connect(f"ws://127.0.0.1:{port}/api/events/p1?token=secret") as ws:
+            time.sleep(0.2)
+            hub.publish("p1", {"event": "progress", "completed": 1, "total": 2})
+            assert '"progress"' in ws.recv(timeout=5)
+    finally:
+        server.should_exit = True

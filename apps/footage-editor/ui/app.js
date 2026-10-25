@@ -89,7 +89,7 @@ $("newProject").addEventListener("close", async () => {
 // ---------- project ------------------------------------------------------------------------------------------------
 
 const P = {
-  id: null, info: null, footage: [], sources: [], edit: null, version: null, versions: [], chat: [],
+  id: null, info: null, footage: [], sources: [], edit: null, version: null, versions: [], feed: [],
 };
 
 async function openProject(id) {
@@ -98,7 +98,7 @@ async function openProject(id) {
   $("home").hidden = true;
   $("project").hidden = false;
   openEvents(id);
-  await Promise.all([loadProject(), loadEdit(), loadChat()]);
+  await Promise.all([loadProject(), loadEdit(), loadActivity()]);
 }
 
 async function loadProject() {
@@ -129,9 +129,10 @@ async function loadEdit(version) {
   renderSources(); renderTimeline(); syncPlayer(true);
 }
 
-async function loadChat() {
-  try { P.chat = await api("GET", `/api/projects/${P.id}/chat`); } catch { P.chat = []; }
-  renderChat();
+async function loadActivity() {
+  try { P.feed = await api("GET", `/api/projects/${P.id}/activity`); } catch { P.feed = []; }
+  live = null;
+  renderFeed();
 }
 
 $("backBtn").addEventListener("click", showHome);
@@ -153,7 +154,7 @@ $("maxMinutes").addEventListener("change", async (e) => {
 $("analyseBtn").addEventListener("click", async () => {
   try {
     if (P.info.analysing) { await api("POST", `/api/projects/${P.id}/stop`); }
-    else { await api("POST", `/api/projects/${P.id}/analyse`); setStatus("Starting…", "busy"); }
+    else { await api("POST", `/api/projects/${P.id}/analyse`); setStatus("Starting…", "busy"); showPane("paneChat"); await loadActivity(); }
     await loadProject();
   } catch (e) { toast(e.message); }
 });
@@ -192,8 +193,10 @@ function onEvent(e) {
     else if (e.event === "activity") setStatus(`${stage}… (${e.message})`, "busy");
     else if (e.event === "stage_started") setStatus(`${stage}…`, "busy");
     else if (e.event === "error") setStatus(`Failed: ${e.message}`, "error");
-    else if (e.event === "finished") setStatus(`Done: version ${e.version}, ${e.seconds} s`);
-    else if (e.event === "job_exit") { loadProject(); loadEdit(); if (e.exit_code && !$("status").className.includes("error")) setStatus("Stopped"); }
+    else if (e.event === "finished") setStatus(`Done: version ${e.version}, ${fmtLength(e.seconds)}`);
+    else if (e.event === "job_exit" && e.stopped) setStatus("Stopped");
+    onJobEvent(e);
+    if (e.event === "job_exit") { loadProject(); loadEdit(); loadActivity(); }
   } else if (e.source === "project") {
     if (e.event === "edit_changed") loadEdit();
     if (e.event === "project_changed") loadProject();
@@ -269,21 +272,119 @@ footagePane.addEventListener("drop", (e) => {
   if (host?.postMessageWithAdditionalObjects) host.postMessageWithAdditionalObjects({ type: "dropped" }, e.dataTransfer.files);
 });
 
-// ---------- chat ---------------------------------------------------------------------------------------------------
+// ---------- activity: the analysis steps and the conversation with Claude, in one feed ------------------------------
 
-let pending = null;
+// What each step does, in words.
+const STEP_TEXT = {
+  ingest: "Reading the footage", transcribe: "Transcribing speech word by word",
+  shots: "Finding shots and checking sharpness, shake and light", sound: "Measuring pauses and loudness",
+  describe: "Claude is looking at every shot", prepare: "Making preview copies and filmstrips",
+  sequence: "Claude is planning the edit",
+};
+const fmtLength = (seconds) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
+const clock = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
-function renderChat() {
-  const box = $("messages"); box.innerHTML = "";
-  for (const m of P.chat) box.appendChild(chatBubble(m));
-  if (pending) box.appendChild(pending.el);
-  box.scrollTop = box.scrollHeight;
+let pending = null;   // the Claude answer being written
+let live = null;      // the analysis running now: its run (as in the feed) plus live progress per step
+
+// Groups the stored feed into analysis runs (from "analysis_started" to "job_exit") and chat messages.
+function feedItems() {
+  const items = [];
+  let run = null;
+  for (const e of P.feed) {
+    if (e.kind === "analysis") {
+      if (e.event === "analysis_started" || !run) { run = { type: "run", start: e, events: [] }; items.push(run); }
+      if (e.event !== "analysis_started") run.events.push(e);
+      if (e.event === "job_exit") run = null;
+    } else {
+      items.push({ type: "chat", entry: e });
+    }
+  }
+  return items;
+}
+
+function runSteps(run) {
+  const steps = new Map();
+  const notes = [];
+  let end = null, summary = null;
+  for (const e of run.events) {
+    if (e.stage && STEP_TEXT[e.stage] && ["stage_started", "stage_done", "stage_skipped"].includes(e.event)) {
+      const st = steps.get(e.stage) || { stage: e.stage, state: "active", detail: "", started: e.elapsed, ended: null };
+      if (e.event === "stage_started") { st.state = "active"; st.started = e.elapsed; st.detail = e.message && !e.message.includes(":\\") ? e.message : ""; }
+      if (e.event === "stage_done") { st.state = "done"; st.ended = e.elapsed; st.detail = e.message; }
+      if (e.event === "stage_skipped") { st.state = "skipped"; st.detail = ["cached", "ready"].includes(e.message) ? "already done" : e.message; }
+      steps.set(e.stage, st);
+    } else if (e.event === "info" && steps.get(e.stage)?.state === "active") {
+      steps.get(e.stage).detail = e.message;
+    } else if (e.event === "warning" || e.event === "info") {
+      notes.push(e);
+    } else if (e.event === "finished" || e.event === "error") {
+      end = e;
+    } else if (e.event === "summary") {
+      summary = e.message;
+    } else if (e.event === "job_exit" && !end) {
+      end = e;
+    }
+  }
+  return { steps, notes, end, summary };
+}
+
+function runCard(run, isLive) {
+  const { steps, notes, end, summary } = runSteps(run);
+  const s = run.start;
+  const profile = profiles.find((x) => x.id === s.profile)?.name || s.profile || "";
+  // A run that never ended and isn't running now was cut off (the app closed during it).
+  const state = isLive ? "running" : end?.event === "finished" ? "done" : end?.stopped ? "stopped" : end ? "failed" : "interrupted";
+  const el = document.createElement("div");
+  el.className = `run ${state}`;
+  el.innerHTML = `<div class="run-head"><b>Analysis</b><span class="run-state">${state}</span></div>
+    <div class="run-meta">${clock(s.time)} · ${esc(profile)}${s.max_seconds ? `, max ${minutes(s.max_seconds)} min` : ""} · ${s.files ?? "?"} file(s)</div>`;
+  for (const [stage, st] of steps) {
+    const lv = isLive && live.progress[stage];
+    const active = st.state === "active";
+    let detail = st.detail;
+    if (active && lv?.message) detail = lv.message;
+    const pct = active && lv?.pct != null ? lv.pct : null;
+    const took = st.ended != null && st.started != null ? fmtLength(st.ended - st.started) : "";
+    const icon = { done: "✓", skipped: "–", active: active && isLive ? "" : "✗" }[st.state];
+    const row = document.createElement("div");
+    row.className = `step ${st.state}${active && isLive ? " live" : ""}`;
+    row.innerHTML = `<span class="icon">${icon}</span><div class="step-body"><div><span class="what">${esc(STEP_TEXT[stage])}</span>
+      <span class="took">${took}</span></div>${detail ? `<div class="detail">${esc(detail)}${pct != null ? ` · ${pct}%` : ""}</div>` : ""}
+      ${pct != null ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}</div>`;
+    el.appendChild(row);
+  }
+  for (const n of notes) {
+    const row = document.createElement("div");
+    row.className = `note ${n.event}`;
+    row.textContent = (n.event === "warning" ? "⚠ " : "") + n.message;
+    el.appendChild(row);
+  }
+  if (end) {
+    const row = document.createElement("div");
+    row.className = "run-end";
+    row.textContent = end.event === "finished"
+      ? `Suggested edit: version ${end.version}, ${fmtLength(end.seconds)} long.`
+      : end.event === "error" ? `Failed: ${end.message}` : end.stopped ? "Stopped. Analysing again continues where it stopped." : `Ended (exit code ${end.exit_code}).`;
+    el.appendChild(row);
+  }
+  if (summary) {
+    const d = document.createElement("details");
+    d.innerHTML = `<summary>Details</summary><pre>${esc(summary)}</pre>`;
+    el.appendChild(d);
+  }
+  return el;
 }
 
 function chatBubble(m) {
   const el = document.createElement("div");
   el.className = "msg " + m.role;
   el.textContent = m.text;
+  if (m.changes?.length) {
+    const c = document.createElement("div"); c.className = "tools";
+    c.textContent = m.changes.map((x) => "✓ " + x).join("\n");
+    el.appendChild(c);
+  }
   if (m.version) {
     const v = document.createElement("div"); v.className = "ver"; v.textContent = `→ version ${m.version}`;
     v.addEventListener("click", async () => { await api("POST", `/api/projects/${P.id}/versions/${m.version}/current`); loadEdit(); });
@@ -292,28 +393,74 @@ function chatBubble(m) {
   return el;
 }
 
+function renderFeed() {
+  const box = $("messages");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = "";
+  const items = feedItems();
+  if (live && !items.some((i) => i.type === "run" && i.start.time === live.run.start.time)) items.push(live.run);
+  for (const it of items) {
+    if (it.type === "chat") box.appendChild(chatBubble(it.entry));
+    else box.appendChild(runCard(it, !!live && it.start.time === live.run.start.time));
+  }
+  if (pending) box.appendChild(pending.el);
+  if (!items.length && !pending) box.innerHTML = `<div class="dim feed-empty">Analysis steps and your conversation with Claude appear here.</div>`;
+  if (atBottom || live || pending) box.scrollTop = box.scrollHeight;
+}
+
+// Live analysis: the stored run (from the feed) plus progress that isn't stored.
+function onJobEvent(e) {
+  if (!live) {
+    const items = feedItems();
+    const last = [...items].reverse().find((i) => i.type === "run");
+    live = { run: last && !runSteps(last).end ? last : { type: "run", start: { time: new Date().toISOString() }, events: [] }, progress: {} };
+  }
+  const kept = ["stage_started", "stage_done", "stage_skipped", "warning", "info", "error", "finished", "summary", "job_exit"];
+  if (kept.includes(e.event) && !String(e.message || "").startsWith("Claude call")) live.run.events.push(e);
+  if (e.stage) {
+    const pr = live.progress[e.stage] || (live.progress[e.stage] = {});
+    if (e.event === "progress" && e.total) {
+      pr.pct = Math.round(100 * e.completed / e.total);
+      if (e.message) pr.message = e.message;
+    } else if (e.event === "activity") {
+      pr.message = e.message.startsWith("model ") ? `Claude (${e.message.slice(6)}) is starting` : `Claude is ${e.message}`;
+    } else if (e.event === "stage_started") {
+      pr.pct = null; pr.message = "";
+    }
+  }
+  if (!$("paneChat").classList.contains("active")) return;
+  renderFeed();
+}
+
 async function send() {
   const text = $("input").value.trim();
   if (!text || pending) return;
   try {
     await api("POST", `/api/projects/${P.id}/chat`, { message: text });
   } catch (e) { toast(e.message); return; }
-  P.chat.push({ role: "user", text });
-  const el = document.createElement("div"); el.className = "msg assistant pending"; el.textContent = "…";
-  const tools = document.createElement("div"); tools.className = "tools"; el.appendChild(tools);
-  pending = { el, text: "", tools };
+  P.feed.push({ kind: "chat", role: "user", text, time: new Date().toISOString() });
+  const el = document.createElement("div"); el.className = "msg assistant pending";
+  const body = document.createElement("div"); body.textContent = "Claude is reading the edit…";
+  const tools = document.createElement("div"); tools.className = "tools";
+  el.append(body, tools);
+  pending = { el, body, tools };
   $("input").value = "";
-  renderChat();
+  renderFeed();
 }
 
 function onChatEvent(e) {
   if (!pending) return;
-  if (e.event === "assistant.delta") { pending.el.firstChild.textContent = e.text; }
-  else if (e.event === "tool.end") { pending.tools.textContent += (e.error ? "✗ " : "✓ ") + e.result + "\n"; }
-  else if (e.event === "chat.done" || e.event === "chat.error") {
+  if (e.event === "assistant.delta") pending.body.textContent = e.text;
+  else if (e.event === "tool.start") pending.tools.textContent += `… ${e.tool}\n`;
+  else if (e.event === "tool.end") {
+    const lines = pending.tools.textContent.split("\n");
+    lines[lines.length - 2] = (e.error ? "✗ " : "✓ ") + e.result;
+    pending.tools.textContent = lines.join("\n");
+  } else if (e.event === "chat.done" || e.event === "chat.error") {
     pending = null;
     if (e.event === "chat.error") toast(e.message);
-    loadChat();
+    loadActivity();
+    return;
   }
   $("messages").scrollTop = $("messages").scrollHeight;
 }
@@ -326,7 +473,7 @@ function showPane(id) {
   activePane = id;
   for (const t of document.querySelectorAll(".tab")) t.classList.toggle("active", t.dataset.pane === id);
   for (const p of document.querySelectorAll(".pane")) p.classList.toggle("active", p.id === id);
-  if (id === "paneChat") { $("messages").scrollTop = $("messages").scrollHeight; $("input").focus(); }
+  if (id === "paneChat") { renderFeed(); $("messages").scrollTop = $("messages").scrollHeight; $("input").focus(); }
 }
 for (const t of document.querySelectorAll(".tab")) t.addEventListener("click", () => showPane(t.dataset.pane));
 function addToMessage(label) {
@@ -602,8 +749,8 @@ $("split").addEventListener("pointerdown", (e) => {
   try {
     profiles = await api("GET", "/api/profiles");
     setTimelineHeight(Number(localStorage.getItem("timelineHeight")) || 280);
-    const opened = location.hash.match(/^#p=([a-z0-9-]+)$/);
-    if (opened) await openProject(opened[1]); else await showHome();
+    const opened = location.hash.match(/^#p=([a-z0-9-]+)(&tab=activity)?$/);
+    if (opened) { await openProject(opened[1]); if (opened[2]) showPane("paneChat"); } else await showHome();
   } catch (e) {
     document.body.textContent = `Can't reach the Footage Editor service: ${e.message}`;
   }

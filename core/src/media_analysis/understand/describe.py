@@ -82,6 +82,7 @@ class DescribeStage(Stage):
                     rep.started("asking Claude what each shot shows")
                     started = True
                 rep.progress(n, len(by_file), f.name)
+                self.need_work()
                 cached = Descriptions(shots=self._describe_file(f, file_shots))
                 self.cache.save(self.name, key, cached)
             out.extend(d.model_copy(update={"file_id": fid}) for d in cached.shots)

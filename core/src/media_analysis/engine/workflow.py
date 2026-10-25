@@ -39,8 +39,10 @@ class RunOptions:
 class RunContext:
     """What the stages of one run share: settings, cache, events and the Claude client."""
 
-    def __init__(self, workflow: Workflow, cache: Cache, force_from: str | None) -> None:
+    def __init__(self, workflow: Workflow, cache: Cache, force_from: str | None, cache_only: bool = False) -> None:
         self.settings = workflow.settings
+        self.cache_only = cache_only
+        """Only read results from the cache; a stage that would have to do work fails instead."""
         self.timer = workflow.timer
         self.sink: EventSink = workflow.timer
         self.cache = cache
@@ -77,6 +79,11 @@ class Stage:
     def key(self, *parts: Any) -> str:
         """Cache key of a result: everything it depends on, plus the stage version."""
         return digest([*parts, self.version])
+
+    def need_work(self) -> None:
+        """Called before a stage does real work; refuses when the run may only read the cache."""
+        if self.ctx.cache_only:
+            raise MediaAnalysisError(f"'{self.name}' isn't in the cache; analyse the footage again.")
 
 
 O = TypeVar("O", bound=RunOptions)

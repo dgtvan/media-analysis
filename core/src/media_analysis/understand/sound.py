@@ -31,6 +31,7 @@ class SoundStage(Stage):
                     rep.started("measuring pauses and loudness")
                     started = True
                 rep.progress(n, len(audio_files), f.name)
+                self.need_work()
                 audio = ffmpeg.decode_audio(Path(f.path), SAMPLE_RATE)
                 cached = FileSound(file_id=f.id, loudness=ffmpeg.loudness(Path(f.path)), silences=silences(audio, SAMPLE_RATE))
                 self.cache.save(self.name, key, cached)

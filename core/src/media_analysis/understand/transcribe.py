@@ -28,6 +28,7 @@ class TranscribeStage(Stage):
             rep.skipped()
             return Transcript(files=[silent.get(f.id) or _relabel(cached[f.id], f.id) for f in ingest.files])  # type: ignore[arg-type]
 
+        self.need_work()
         transcriber = FasterWhisperTranscriber(ts, detect())
         rep.started(f"model {ts.model} on {transcriber.device} ({transcriber.compute_type})")
         results: list[FileTranscript] = []

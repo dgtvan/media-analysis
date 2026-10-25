@@ -61,7 +61,8 @@ class Job:
     """A CLI run in a child process whose JSON events go to a channel."""
 
     def __init__(self, channel: str, args: list[str], hub: EventHub, env: dict[str, str] | None = None,
-                 on_exit: Callable[[int], None] | None = None) -> None:
+                 on_exit: Callable[[int], None] | None = None,
+                 on_event: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.channel = channel
         self.hub = hub
         self.last: dict[str, Any] = {}
@@ -70,6 +71,8 @@ class Job:
             env={**os.environ, **(env or {}), "PYTHONIOENCODING": "utf-8"}, creationflags=_NO_WINDOW,
         )
         self._on_exit = on_exit
+        self._on_event = on_event
+        self.stopped = False
         threading.Thread(target=self._pump, daemon=True).start()
 
     def _pump(self) -> None:
@@ -81,9 +84,14 @@ class Job:
                 continue
             if event.get("event") in ("stage_started", "progress", "stage_done", "stage_skipped", "activity"):
                 self.last = event
+            if self._on_event:
+                self._on_event(event)
             self.hub.publish(self.channel, {"source": "job", **event})
         code = self.proc.wait()
-        self.hub.publish(self.channel, {"source": "job", "event": "job_exit", "exit_code": code})
+        exit_event = {"event": "job_exit", "exit_code": code, "stopped": self.stopped}
+        if self._on_event:
+            self._on_event(exit_event)
+        self.hub.publish(self.channel, {"source": "job", **exit_event})
         if self._on_exit:
             self._on_exit(code)
 
@@ -93,6 +101,7 @@ class Job:
 
     def stop(self) -> None:
         if self.running:
+            self.stopped = True
             if sys.platform == "win32":
                 # /T also ends ffmpeg and Claude Code started by the run.
                 subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"], capture_output=True,

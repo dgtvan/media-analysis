@@ -51,7 +51,7 @@
   <div class="left">
     <div class="tabs">
       <div class="tab active" data-pane="paneFootage">Footage</div>
-      <div class="tab" data-pane="paneChat">Chat</div>
+      <div class="tab" data-pane="paneChat">Activity</div>
     </div>
     <div class="pane active" id="paneFootage">
       <div class="list-head">
@@ -64,9 +64,10 @@
     </div>
     <div class="pane" id="paneChat">
       <div class="messages" id="messages"></div>
-      <div class="hint">Refer to tracks and clips by their names: "move #9 after #4", "merge V2 into V1". Click a clip on the timeline to add its id here.</div>
+      <div class="hint">Tell Claude what to change, or ask about the footage. Refer to clips and tracks by their ids
+        ("move #9 after #4", "merge V2 into V1"); clicking a clip on the timeline adds its id here.</div>
       <div class="composer">
-        <textarea id="input" placeholder="Ask for a change…"></textarea>
+        <textarea id="input" placeholder="Instructions for Claude…"></textarea>
         <button class="btn" id="send">Send</button>
       </div>
     </div>

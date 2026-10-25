@@ -8,6 +8,7 @@ from the project folder. The UI never reads files itself.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 import shutil
@@ -33,6 +34,7 @@ from media_analysis.workflows.edit.workflow import (
 )
 
 API_VERSION = 1
+KEPT_EVENTS = {"stage_started", "stage_done", "stage_skipped", "warning", "info", "error", "finished", "summary", "job_exit"}
 
 
 class NewProject(BaseModel):
@@ -204,13 +206,41 @@ class EditService:
         if not load_project_info(d).files:
             raise HTTPException(400, "Import some footage first.")
         args = ["edit-project", str(d), "--json", *self.cli_args, *(["--fresh"] if fresh else [])]
+        info = load_project_info(d)
+        self._log(d, {"event": "analysis_started", "profile": info.profile_id, "max_seconds": info.max_seconds,
+                      "files": len(info.files or [])})
 
         def done(code: int) -> None:
             self._open.pop(project_id, None)
             self.hub.publish(project_id, {"source": "project", "event": "project_changed"})
 
-        self.jobs[project_id] = Job(project_id, args, self.hub, on_exit=done)
+        def keep(event: dict) -> None:
+            # The steps of an analysis stay in the project's activity; live progress only goes to the screen.
+            if event.get("event") in KEPT_EVENTS and not str(event.get("message", "")).startswith("Claude call"):
+                self._log(d, {k: v for k, v in event.items() if k != "time"})
+
+        self.jobs[project_id] = Job(project_id, args, self.hub, on_exit=done, on_event=keep)
         return self.summary(project_id)
+
+    def _log(self, d: Path, entry: dict) -> None:
+        (d / "chat").mkdir(parents=True, exist_ok=True)
+        entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "kind": "analysis", **entry}
+        with (d / "chat" / "activity.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def activity(self, project_id: str, limit: int = 400) -> list[dict]:
+        """The project's feed: analysis steps and the conversation with Claude, oldest first."""
+        d = self.dir(project_id)
+        entries: list[dict] = []
+        path = d / "chat" / "activity.jsonl"
+        if path.exists():
+            entries += [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        history = d / "chat" / "history.jsonl"
+        if history.exists():
+            entries += [{"kind": "chat", **json.loads(line)} for line in history.read_text(encoding="utf-8").splitlines()
+                        if line.strip()]
+        entries.sort(key=lambda e: e.get("time", ""))
+        return entries[-limit:]
 
     def stop(self, project_id: str) -> None:
         job = self.jobs.get(project_id)
@@ -394,6 +424,7 @@ def mount_edit_api(app: FastAPI, svc: EditService) -> None:
     r.post("/projects/{project_id}/versions/{version}/current")(svc.make_current)
     r.post("/projects/{project_id}/undo")(svc.undo)
     r.get("/projects/{project_id}/chat")(svc.chat_history)
+    r.get("/projects/{project_id}/activity")(svc.activity)
     r.post("/projects/{project_id}/chat")(svc.chat)
 
     @r.get("/projects/{project_id}/export/edit.json")

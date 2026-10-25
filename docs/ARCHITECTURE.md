@@ -381,7 +381,9 @@ local      local (words,   local    local    Claude      local      Claude
   .cache/                 stage results (shared understanding + edit stages)
   media/<fingerprint>.proxy.mp4, .strip.jpg   proxies (720p, constant frame rate, keyframe every 0.5 s), filmstrips
   edit/index.json, v0001.json, ...            edit versions
-  chat/history.jsonl, memory.md               the conversation and lasting preferences
+  understanding.json      what the last finished analysis found (footage, transcript, shots, descriptions, the
+                          view Claude reads), so the project opens and chats without re-running any stage
+  chat/history.jsonl, memory.md, activity.jsonl   the conversation, lasting preferences, and analysis steps
   export/edit.json, edit.md
 ```
 

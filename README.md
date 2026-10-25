@@ -126,8 +126,12 @@ not an editor: the timeline shows what was kept and what was cut, and every chan
   on its row. *Full footage* shows every used clip at full length with the cut parts dimmed (click one to play it);
   *Edit only* shows the cut. Clips carry labels (#1, T1, M1, FX1) to refer to in the chat. Drag the bar above the
   timeline to resize it.
-- **Footage tab**: the imported files with the ids of the cuts taken from each. **Chat tab**: ask for changes ("make
-  the intro shorter", "use the drone shot over #3", "merge V2 into V1"); clicking a clip adds its id to the message.
+- **Footage tab**: the imported files with a thumbnail, their length and the ids of the cuts taken from each.
+- **Activity tab**: one feed for what happens in the project. Each analysis shows its steps in words (reading the
+  footage, transcribing, finding shots, Claude looking at the shots, making previews, Claude planning the edit) with
+  live progress, how long each step took, warnings and the result. Below it you give Claude instructions ("make the
+  intro shorter", "use the drone shot over #3", "merge V2 into V1"); its answers and the changes it made appear in the
+  same feed. Clicking a clip adds its id to the message.
 - **Versions**: every change is a version (*Version* drop-down, *Undo*); changed items are outlined. Music and sound
   effects are placeholders for now.
 - **Export**: `edit.json` (sources, tracks and items in seconds, with the reason and words of each clip) to rebuild

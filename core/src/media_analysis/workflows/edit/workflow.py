@@ -25,7 +25,7 @@ from media_analysis.media import ffmpeg
 from media_analysis.providers.llm import create_llm
 from media_analysis.understand.describe import DescribeStage
 from media_analysis.understand.ingest import IngestStage
-from media_analysis.understand.models import Descriptions, Ingest
+from media_analysis.understand.models import Descriptions, Ingest, ShotList, Transcript
 from media_analysis.understand.shots import ShotsStage
 from media_analysis.understand.sound import SoundStage
 from media_analysis.understand.transcribe import TranscribeStage
@@ -39,6 +39,7 @@ from media_analysis.workflows.edit.view import footage_view
 
 USER_EDIT_PROFILES_DIR = USER_HOME / "edit-profiles"
 PROJECT_FILE = "project.json"
+SNAPSHOT_FILE = "understanding.json"
 MEDIA_DIR = "media"
 EDIT_DIR_KIND = "edit"
 
@@ -126,7 +127,7 @@ class EditResult:
 
 @dataclass
 class Understanding:
-    """What the edit's chat needs again later; rebuilt from the cache when a project is opened."""
+    """What the chat and the app need again after an analysis."""
 
     ingest: Ingest
     footage: Footage
@@ -134,16 +135,30 @@ class Understanding:
     view: str
 
 
-def understand_footage(ctx: RunContext, opts: EditOptions, profile: EditProfile) -> Understanding:
+class UnderstandingSnapshot(BaseModel):
+    """The understanding of the last finished analysis (understanding.json), so a project opens without re-running
+    any stage, and keeps working while a new analysis rebuilds its cache."""
+
+    ingest: Ingest
+    transcript: Transcript
+    shots: ShotList
+    descriptions: Descriptions | None
+    view: str
+
+    def understanding(self) -> Understanding:
+        phrases = file_phrases(self.ingest, self.transcript)
+        return Understanding(self.ingest, Footage(self.ingest, phrases, self.shots), self.descriptions, self.view)
+
+
+def understand_footage(ctx: RunContext, opts: EditOptions, profile: EditProfile) -> UnderstandingSnapshot:
     ingest = IngestStage(ctx).run(opts.input_dir, opts.files)
     ctx.timer.audio_seconds = sum(f.duration for f in ingest.files if f.uses_audio)
     transcript = TranscribeStage(ctx).run(ingest)
     shots = ShotsStage(ctx).run(ingest)
     sound = SoundStage(ctx).run(ingest)
     descriptions = DescribeStage(ctx).run(ingest, shots) if profile.analysis.describe else None
-    phrases = file_phrases(ingest, transcript)
-    view = footage_view(ingest, phrases, shots, descriptions, sound)
-    return Understanding(ingest, Footage(ingest, phrases, shots), descriptions, view)
+    view = footage_view(ingest, file_phrases(ingest, transcript), shots, descriptions, sound)
+    return UnderstandingSnapshot(ingest=ingest, transcript=transcript, shots=shots, descriptions=descriptions, view=view)
 
 
 class EditWorkflow(Workflow[EditOptions, EditResult]):
@@ -181,7 +196,8 @@ class EditWorkflow(Workflow[EditOptions, EditResult]):
     def execute(self, ctx: RunContext, opts: EditOptions) -> EditResult:
         profile = self._profile
         assert profile is not None
-        u = self._understanding = understand_footage(ctx, opts, profile)
+        snapshot = understand_footage(ctx, opts, profile)
+        u = self._understanding = snapshot.understanding()
         PrepareStage(ctx).run(u.ingest, opts.output_dir)
         first = SequenceStage(ctx).run(u.view, profile, u.footage, opts.max_seconds)
         store = edit_store(opts.output_dir)
@@ -197,6 +213,7 @@ class EditWorkflow(Workflow[EditOptions, EditResult]):
             input_dir=str(opts.input_dir) if opts.files is None else None,
         ))
         write_exports(store.load(), u.ingest, info.version, opts.output_dir / "export")
+        (opts.output_dir / SNAPSHOT_FILE).write_text(snapshot.model_dump_json(), encoding="utf-8")
         return EditResult(version=info, plan=store.load(), warnings=first.warnings)
 
     def record_fields(self, result: EditResult | None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -215,17 +232,27 @@ class EditWorkflow(Workflow[EditOptions, EditResult]):
         }, {"profile": self._profile.id if self._profile else None}
 
 
-def open_project(project_dir: Path, settings: Settings, sink: EventSink = null_sink) -> tuple[Understanding, EditProfile]:
-    """The understanding of an analysed project, rebuilt from its cache (no new analysis), and its profile."""
-    from media_analysis.engine.cache import Cache
-
+def open_project(project_dir: Path, settings: Settings) -> tuple[Understanding, EditProfile]:
+    """The understanding of the project's last finished analysis and its profile. Never runs a stage."""
     info = load_project_info(project_dir)
-    wf = EditWorkflow(settings, sink)
-    opts = EditOptions(
-        input_dir=Path(info.input_dir) if info.input_dir else project_dir, output_dir=project_dir,
-        profile_id=info.profile_id, max_seconds=info.max_seconds,
-        files=[Path(p) for p in info.files] if info.files is not None else None,
-    )
-    wf.prepare(opts)
-    ctx = RunContext(wf, Cache(project_dir / CACHE_DIR_NAME), None)
-    return understand_footage(ctx, opts, wf._profile), wf._profile  # type: ignore[arg-type]
+    path = project_dir / SNAPSHOT_FILE
+    profiles = load_edit_profiles([USER_EDIT_PROFILES_DIR])
+    profile = profiles.get(info.profile_id) or profiles["generic"]
+    if not path.exists():
+        # Projects analysed before snapshots existed: rebuild it from the cache, without doing any analysis.
+        if not (project_dir / CACHE_DIR_NAME).is_dir():
+            raise MediaAnalysisError("The footage hasn't been analysed yet.")
+        from media_analysis.engine.cache import Cache
+
+        wf = EditWorkflow(settings)
+        opts = EditOptions(
+            input_dir=Path(info.input_dir) if info.input_dir else project_dir, output_dir=project_dir,
+            profile_id=profile.id, files=[Path(p) for p in info.files] if info.files is not None else None,
+        )
+        wf.prepare(opts)
+        ctx = RunContext(wf, Cache(project_dir / CACHE_DIR_NAME), None, cache_only=True)
+        snapshot = understand_footage(ctx, opts, profile)
+        path.write_text(snapshot.model_dump_json(), encoding="utf-8")
+        return snapshot.understanding(), profile
+    snapshot = UnderstandingSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+    return snapshot.understanding(), profile

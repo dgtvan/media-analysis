@@ -29,6 +29,7 @@ class ShotsStage(Stage):
                 if not started:
                     rep.started("finding shots and measuring quality")
                     started = True
+                self.need_work()
                 raw = detect_shots(
                     Path(f.path), f.duration, params,
                     on_progress=lambda done, total, name=f.name, n=n: rep.progress(n + done / total, len(videos), name),
