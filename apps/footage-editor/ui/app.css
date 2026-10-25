@@ -176,6 +176,7 @@ a.btn { text-decoration: none; display: inline-block; color: var(--text); }
 .rec.warning .rec-icon, .rec.warning .rec-title { color: #f5d27a; }
 .rec.failed .rec-icon, .rec.failed .rec-title { color: #ff8a8a; }
 .rec.skipped .rec-title, .rec.info .rec-title { color: var(--dim); }
+.rec.reused .rec-icon { color: #7fb8d8; font-weight: 700; }
 .rec.stopped .rec-icon { color: #f5d27a; }
 .rec.live .rec-icon { width: 10px; height: 10px; margin: 2px 2px 0; border: 2px solid #8fb8ff; border-right-color: transparent;
   border-radius: 50%; animation: spin 1s linear infinite; }

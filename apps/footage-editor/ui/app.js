@@ -288,7 +288,10 @@ const STEP_TEXT = {
 };
 const KEPT = ["analysis_started", "stage_started", "stage_done", "stage_skipped", "warning", "info", "error", "finished",
   "summary", "job_exit"];
-const fmtLength = (seconds) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
+const fmtLength = (seconds) => {
+  const s = Math.round(seconds);
+  return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
+};
 const clock = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
 
 let pending = null;            // the Claude answer being written
@@ -327,8 +330,9 @@ function analysisRecord(e, startedAt, isRunningStep) {
         esc(e.message || "") + (startedAt[e.stage] != null && e.elapsed != null ? ` · took ${fmtLength(e.elapsed - startedAt[e.stage])}` : ""), e.time);
     case "stage_skipped":
       if (!step) return null;
-      return record("–", "analysis skipped", esc(step[0]),
-        ["cached", "ready"].includes(e.message) ? "already done earlier, reused" : esc(e.message || ""), e.time);
+      if (!e.message || ["cached", "ready"].includes(e.message))
+        return record("↻", "analysis reused", esc(step[1]), "done earlier, result reused", e.time);
+      return record("–", "analysis skipped", esc(step[0]), `not needed: ${esc(e.message)}`, e.time);
     case "info":
       return step ? record("·", "analysis info", esc(e.message), "", e.time) : null;
     case "warning":
