@@ -23,7 +23,7 @@
     <h2>New project</h2>
     <label>Name <input name="name" required placeholder="Weekend hike"></label>
     <label>Profile <select name="profile" id="newProfile"></select></label>
-    <label>Duration limit <span class="field-row"><input name="max" type="number" min="5" step="1" placeholder="no limit"> s</span></label>
+    <label>Duration limit <span class="field-row"><input name="max" type="number" min="0.1" step="0.1" placeholder="no limit"> min</span></label>
     <p class="dim" id="newProfileHint"></p>
     <div class="dialog-actions">
       <button class="btn" value="cancel" formnovalidate>Cancel</button>
@@ -41,7 +41,7 @@
     <span class="spacer"></span>
     <label class="inline">Profile <select id="profile"></select></label>
     <label class="inline" title="The longest the proposed edit may be; empty = the profile's own limit">Max
-      <input id="maxSeconds" type="number" min="5" step="1" placeholder="none"> s</label>
+      <input id="maxMinutes" type="number" min="0.1" step="0.1" placeholder="none"> min</label>
     <button class="btn primary" id="analyseBtn">Analyse</button>
     <label class="inline">Version <select id="version"></select></label>
     <button class="btn" id="undoBtn" title="Go back to the previous version">Undo</button>

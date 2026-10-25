@@ -154,7 +154,7 @@ def edit(
     footage: Annotated[Path, typer.Argument(help="Folder with the footage (video/audio files).")],
     project_dir: Annotated[Path, typer.Argument(help="Project folder for the analysis, proxies and edit versions.")],
     profile: Annotated[str, typer.Option("--profile", "-p", help="Edit profile, e.g. talking-head, travel-montage.")] = "generic",
-    max_seconds: Annotated[Optional[int], typer.Option(help="Longest the proposed edit may be (overrides the profile's limit).")] = None,
+    max_minutes: Annotated[Optional[float], typer.Option(help="Longest the proposed edit may be, in minutes, e.g. 1.5 (overrides the profile's limit).")] = None,
     force: Annotated[Optional[str], typer.Option(help="Redo this stage and all later ones.")] = None,
     fresh: Annotated[bool, typer.Option(help="Delete the cache of earlier runs first.")] = False,
     whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model.")] = None,
@@ -180,7 +180,8 @@ def edit(
     sink: ConsoleSink | JsonSink = JsonSink() if json_output else ConsoleSink(console, verbose)
     try:
         result = EditWorkflow(settings, sink).run(EditOptions(
-            input_dir=footage, output_dir=project_dir, profile_id=profile, max_seconds=max_seconds,
+            input_dir=footage, output_dir=project_dir, profile_id=profile,
+            max_seconds=max(1, round(max_minutes * 60)) if max_minutes else None,
             force_from=force, fresh=fresh,
         ))
     except Exception as e:

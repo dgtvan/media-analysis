@@ -117,7 +117,7 @@ not an editor: the timeline shows what was kept and what was cut, and every chan
 
 - **Projects**: create one with a name, a **profile** (Talking head / vlog, Travel / b-roll montage, Interview
   highlights, Tutorial / screen recording, Event recap, Short-form 9:16, Generic) and optionally a **duration limit**,
-  the longest the edit may be. Import footage with *+ Import* or by dropping files on the Footage tab; files stay
+  the longest the edit may be, in minutes (decimals allowed, e.g. 1.5). Import footage with *+ Import* or by dropping files on the Footage tab; files stay
   where they are.
 - **Analyse**: transcribes with word timings, finds shots and measures their quality, has Claude describe the shots,
   makes small preview copies, and has Claude propose the first edit. Claude chooses moments; code places the cuts
@@ -138,7 +138,7 @@ not an editor: the timeline shows what was kept and what was cut, and every chan
 Projects are in `%LOCALAPPDATA%\VanDang\FootageEditor\data\projects`. From the command line:
 
 ```
-media-analysis edit <footage-folder> <project-folder> --profile talking-head --max-seconds 60
+media-analysis edit <footage-folder> <project-folder> --profile talking-head --max-minutes 1.5
 media-analysis chat <project-folder> "make the opening shorter"
 media-analysis serve --ui apps/footage-editor/ui      # the app's local service, for development
 ```

@@ -30,6 +30,9 @@ function toast(text, ms = 4000) {
 
 const fmt = (t) => { t = Math.max(0, t); const m = Math.floor(t / 60), s = t - m * 60; return `${String(m).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`; };
 const fmtSrc = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+// Durations are shown in minutes (decimals allowed) and kept in whole seconds by the API.
+const minutes = (seconds) => seconds == null ? "" : String(+(seconds / 60).toFixed(2));
+const toSeconds = (text) => { const m = Number(String(text).trim().replace(",", ".")); return text && m > 0 ? Math.max(1, Math.round(m * 60)) : null; };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 let profiles = [];
@@ -48,7 +51,7 @@ async function showHome() {
     const profile = profiles.find((x) => x.id === p.profile_id)?.name || p.profile_id;
     const state = p.analysing ? "analysing…" : p.current_version ? `version ${p.current_version} of ${p.versions}` : "not analysed";
     return `<div class="card" data-id="${p.id}"><div class="name">${esc(p.name)}</div>
-      <div class="meta">${esc(profile)}${p.max_seconds ? ` · max ${p.max_seconds} s` : ""}</div>
+      <div class="meta">${esc(profile)}${p.max_seconds ? ` · max ${minutes(p.max_seconds)} min` : ""}</div>
       <div class="meta">${p.files} file(s) · ${state}</div></div>`;
   }).join("");
   for (const card of document.querySelectorAll(".card")) card.addEventListener("click", () => openProject(card.dataset.id));
@@ -68,7 +71,7 @@ $("newProjectBtn").addEventListener("click", () => {
 });
 function updateProfileHint() {
   const p = profiles.find((x) => x.id === $("newProfile").value);
-  $("newProfileHint").textContent = p ? `${p.description} Target ${p.target_seconds} s${p.max_seconds ? `, at most ${p.max_seconds} s` : ""}.` : "";
+  $("newProfileHint").textContent = p ? `${p.description} Target ${minutes(p.target_seconds)} min${p.max_seconds ? `, at most ${minutes(p.max_seconds)} min` : ""}.` : "";
 }
 $("newProfile").addEventListener("change", updateProfileHint);
 $("newProject").addEventListener("close", async () => {
@@ -76,7 +79,7 @@ $("newProject").addEventListener("close", async () => {
   const f = new FormData($("newProjectForm"));
   try {
     const p = await api("POST", "/api/projects", {
-      name: f.get("name"), profile_id: f.get("profile"), max_seconds: f.get("max") ? Number(f.get("max")) : null,
+      name: f.get("name"), profile_id: f.get("profile"), max_seconds: toSeconds(f.get("max")),
     });
     $("newProjectForm").reset();
     openProject(p.id);
@@ -103,8 +106,8 @@ async function loadProject() {
   P.footage = await api("GET", `/api/projects/${P.id}/footage`);
   $("projectName").textContent = P.info.name;
   fillProfiles($("profile"), P.info.profile_id);
-  $("maxSeconds").value = P.info.max_seconds ?? "";
-  $("maxSeconds").placeholder = profiles.find((x) => x.id === P.info.profile_id)?.max_seconds ?? "none";
+  $("maxMinutes").value = minutes(P.info.max_seconds);
+  $("maxMinutes").placeholder = minutes(profiles.find((x) => x.id === P.info.profile_id)?.max_seconds) || "none";
   $("analyseBtn").textContent = P.info.analysing ? "Stop" : P.info.current_version ? "Analyse again" : "Analyse";
   setStatus(P.info.analysing ? "Analysing…" : "", P.info.analysing ? "busy" : "");
   renderSources();
@@ -137,10 +140,12 @@ $("profile").addEventListener("change", async (e) => {
   try { await api("PATCH", `/api/projects/${P.id}`, { profile_id: e.target.value }); await loadProject(); toast("Profile changed. Analyse again to get a new suggestion."); }
   catch (err) { toast(err.message); }
 });
-$("maxSeconds").addEventListener("change", async (e) => {
+$("maxMinutes").addEventListener("change", async (e) => {
   const v = e.target.value.trim();
   try {
-    await api("PATCH", `/api/projects/${P.id}`, v ? { max_seconds: Number(v) } : { clear_max_seconds: true });
+    const seconds = toSeconds(v);
+    if (v && !seconds) { toast("Enter the limit in minutes, e.g. 1.5"); return; }
+    await api("PATCH", `/api/projects/${P.id}`, seconds ? { max_seconds: seconds } : { clear_max_seconds: true });
     await loadProject();
     toast("Duration limit changed. Analyse again to get a suggestion within it, or ask in the chat.");
   } catch (err) { toast(err.message); }
