@@ -1,16 +1,21 @@
 # Architecture
 
 The repo holds an analysis core and the Windows apps built on it. The core first works out what is in a folder of
-video and audio (the speech, what is on screen); a **workflow** then turns that into a result. Today there is one
-workflow, **report**, and one app, **Recording Reports**: a folder of recordings of one session becomes a report
-folder, a Markdown report written to a matching template plus the frames and the text read from them that back the
-report up.
+video and audio (the speech, what is on screen); a **workflow** then turns that into a result. There are two:
+
+- **report**, used by **Recording Reports**: a folder of recordings of one session becomes a report folder, a Markdown
+  report written to a matching template plus the frames and the text read from them that back the report up.
+- **edit**, used by **Footage Editor**: imported footage and a profile become a suggested multi-track edit, shown as a
+  preview over a timeline of the full footage, and changed only by chatting with Claude. Every change is a version.
 
 - **The core** (`core/src/media_analysis`, Python): the workflows and the shared understanding stages. It runs as a
   command-line program and knows nothing about the apps.
 - **Recording Reports** (`apps/recording-reports`, .NET 10 WinForms): a tray app that watches a projects folder, runs
   the core's report workflow for each project and shows status, logs and settings. It starts the core as a child
   process and reads its progress.
+- **Footage Editor** (`apps/footage-editor`): a window hosting an HTML presentation in WebView2. The .NET part only
+  starts the core's local service and helps with files; everything else goes through the service's Project API
+  (section 5).
 
 ```
            Recording Reports (apps/recording-reports)                  Core (core/src/media_analysis)
@@ -47,7 +52,8 @@ How it is built, installed and updated is in [DEPLOYMENT.md](DEPLOYMENT.md).
 | CLI | Typer + Rich |
 | Data | Pydantic models for every stage result, JSON in the cache |
 | Templates | Markdown files with YAML front matter |
-| Windows app | .NET 10 WinForms, framework-dependent |
+| Windows apps | .NET 10 WinForms, framework-dependent; Footage Editor's screen is HTML in WebView2 |
+| Local service | FastAPI + uvicorn on 127.0.0.1 with a token, WebSocket events |
 
 ## 3. Core
 
@@ -319,7 +325,67 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
 - **Data folder.** Everything the app writes is under the folder given with `--data-dir` (settings, templates, logs,
   history, `pending.json`, `durations.json` with measured lengths, run statistics). The core gets the same folder through `MEDIA_ANALYSIS_HOME`.
 
-## 5. Testing
+## 5. Footage Editor and the edit workflow
+
+### 5.1 Layers
+
+```
+Presentation   apps/footage-editor/ui (HTML, CSS, JS)        ← replaceable; talks only to the Project API
+     │  HTTP + WebSocket on 127.0.0.1, token
+Application    workflows/edit/api.py (projects, footage, analysis jobs, edit versions, chat)
+Domain         workflows/edit (profiles, cut rules, first edit, chat tools) + understand/ (shared)
+Engine         engine/service.py (server, events, jobs), engine/documents.py (versions), providers/agent.py
+Host           apps/footage-editor/FootageEditor (.NET): window, WebView2, starts/stops the service, file dialogs
+```
+
+The service (`media-analysis serve --ui <folder>`) listens on a free port and prints its address as one JSON line;
+the host reads it and opens it in WebView2. Analyses run as child processes of the CLI (`edit-project`), so they can
+be stopped and can't take the service down; their JSON events go to the project's WebSocket channel. Chat turns run
+in the service and stream Claude's text and each tool call to the same channel.
+
+### 5.2 Edit workflow
+
+```
+ingest ─► transcribe ─► shots ─► sound ─► describe ─► prepare ─► sequence
+local      local (words,   local    local    Claude      local      Claude
+           fillers kept)
+```
+
+- **Profiles** (`workflows/edit/profiles/builtin/*.md`, user copies in `<data folder>/edit-profiles`): structured
+  settings (what cuts follow, target length, optional maximum, aspect, pacing, clip lengths, structure, captions,
+  b-roll, music, sound effects) plus guidance for Claude. A project can set its own maximum length next to the
+  profile; it overrides the profile's.
+- **What Claude reads** (`workflows/edit/view.py`): per clip its shots (id, times, description, problems) and its
+  speech as numbered phrases (`f1.p12`).
+- **Claude chooses, code cuts** (`cuts.py`): a main-track clip is a range of phrases, optionally starting or ending at
+  given words, or a shot (or part of it). Code cuts between words with 80 ms of air before and 120 ms after, never
+  reaching into the neighbouring word, and keeps shots within their bounds. Times are whole milliseconds.
+- **The plan** (`models.py`): tracks T1 captions, V2 b-roll, V1 main, A1 dialogue (the sound of V1), A2 music, A3
+  sound effects. Main clips play back to back; everything else is anchored to a main clip with an offset, so it moves
+  with it. Music and sound effects are placeholders until there is a library.
+- **First edit** (`sequence.py`): one Claude call returns the plan; code builds it with the same operations the chat
+  uses (`draft.py`), so bad ids become warnings instead of broken edits. If it comes out longer than the limit,
+  Claude gets one more call with the real length.
+- **Chat** (`chat.py`): each message is one Claude turn with tools (find footage, add/replace/trim/move/remove clips,
+  captions, sound effects, music, merge/split/rename tracks, remember a preference). Tools change a working copy; if
+  anything changed it is saved as a new version with its parent, so any version can be compared or made current
+  again (`engine/documents.py`). Each change reports the new length when it goes over the limit.
+- **Exports** (`export.py`): `export/edit.json` (seconds, original file paths, every track and item) and
+  `export/edit.md`, rewritten with every version.
+
+### 5.3 Project folder
+
+```
+<data folder>/projects/<id>/
+  project.json            name, profile, maximum length, imported footage paths (footage is never copied)
+  .cache/                 stage results (shared understanding + edit stages)
+  media/<fingerprint>.proxy.mp4, .strip.jpg   proxies (720p, constant frame rate, keyframe every 0.5 s), filmstrips
+  edit/index.json, v0001.json, ...            edit versions
+  chat/history.jsonl, memory.md               the conversation and lasting preferences
+  export/edit.json, edit.md
+```
+
+## 6. Testing
 
 - Core: unit tests for segmentation, hashing, audio chunking, cache keys, templates, classification, output assembly,
   the performance summary and run records (`uv run --project core pytest`). `core/tests/fixtures/make_sample.py`
@@ -327,9 +393,14 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
 - Recording Reports: tests for the catalog, settings, auto-analysis, durations, event parsing and migration
   (`dotnet test apps/recording-reports`). One test runs a real analysis through the app's runner when
   `MEDIA_ANALYSIS_TEST_CORE_DIR` and `MEDIA_ANALYSIS_TEST_PROJECT` are set.
+- Edit workflow and service: cut rules, plan operations, first-edit building, exports, versions, the Project API
+  (in `core/tests`). Footage Editor host: `dotnet test apps/footage-editor`.
 
-## 6. Possible future work
+## 7. Possible future work
 
+- CapCut export (its draft format), and editor exports such as OTIO/FCPXML.
+- A "look" tool in the chat, so Claude can check a moment's frames, waveform and words before answering.
+- Music and sound-effect libraries chosen by Claude; rendering the final video.
 - Speaker diarization (who said what) for recordings that aren't split per speaker.
 - A helper that drafts a template from a finished run.
 - Keeping each run's report, so older statistics records can point at the report they produced.

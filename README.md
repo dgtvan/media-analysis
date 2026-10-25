@@ -5,11 +5,13 @@ A core that analyses folders of video and audio (what is said, what is shown), a
 ```
 core/                    the analysis core (Python), also the media-analysis command
 apps/recording-reports/  Recording Reports, the Windows app that turns recordings into reports
+apps/footage-editor/     Footage Editor, the Windows app that turns footage into a suggested edit
 scripts/                 build, install and uninstall scripts shared by the apps
-docs/                    ARCHITECTURE.md, DEPLOYMENT.md
+docs/                    ARCHITECTURE.md, DEPLOYMENT.md, DECISIONS.md (what changed and why)
 ```
 
-Today the core has one workflow, **report**: it turns a folder of recordings into one Markdown report. It transcribes
+The core has two workflows. **edit** turns footage into a suggested multi-track edit (see
+[Footage Editor](#footage-editor-windows-app)). **report** turns a folder of recordings into one Markdown report. It transcribes
 the speech, works out what kind of recording it is (meeting, technical discussion, lecture, interview, language
 practice, casual chat, or your own template), picks the moments where the picture matters, and writes a report that
 embeds those frames as evidence.
@@ -104,9 +106,42 @@ elapsed time, log) are kept in `%LOCALAPPDATA%\VanDang\RecordingReports\data\his
 
 ### Meeting Recorder folders
 
-A folder with Meeting Recorder's layout (`video.mp4` without sound, `audio-mic.wav`, `audio-system.wav`) is one
-session: the two transcripts are merged into one conversation on a shared timeline, labelled *Me* (microphone) and
-*Others* (computer audio), and frames come from the video.
+A folder with Meeting Recorder's layout (`video.mp4`, `audio-mic.wav`, `audio-system.wav`) is one session: the two
+transcripts are merged into one conversation on a shared timeline, labelled *Me* (microphone) and *Others* (computer
+audio), and frames come from the video. If the video has sound too, it is only their mix and isn't transcribed.
+
+## Footage Editor (Windows app)
+
+Footage Editor (`apps/footage-editor/`) turns footage into a suggested edit you refine by chatting with Claude. It is
+not an editor: the timeline shows what was kept and what was cut, and every change goes through the chat.
+
+- **Projects**: create one with a name, a **profile** (Talking head / vlog, Travel / b-roll montage, Interview
+  highlights, Tutorial / screen recording, Event recap, Short-form 9:16, Generic) and optionally a **duration limit**,
+  the longest the edit may be. Import footage with *+ Import* or by dropping files on the Footage tab; files stay
+  where they are.
+- **Analyse**: transcribes with word timings, finds shots and measures their quality, has Claude describe the shots,
+  makes small preview copies, and has Claude propose the first edit. Claude chooses moments; code places the cuts
+  between words.
+- **Timeline**: tracks T1 captions, V2 b-roll, V1 main, A1 dialogue, A2 music, A3 sound effects, with each track's name
+  on its row. *Full footage* shows every used clip at full length with the cut parts dimmed (click one to play it);
+  *Edit only* shows the cut. Clips carry labels (#1, T1, M1, FX1) to refer to in the chat. Drag the bar above the
+  timeline to resize it.
+- **Footage tab**: the imported files with the ids of the cuts taken from each. **Chat tab**: ask for changes ("make
+  the intro shorter", "use the drone shot over #3", "merge V2 into V1"); clicking a clip adds its id to the message.
+- **Versions**: every change is a version (*Version* drop-down, *Undo*); changed items are outlined. Music and sound
+  effects are placeholders for now.
+- **Export**: `edit.json` (sources, tracks and items in seconds, with the reason and words of each clip) to rebuild
+  the edit in another editor. CapCut export is planned.
+- **Settings** (on the projects screen): which Claude Code login to use. On the first start it takes Recording
+  Reports' choice.
+
+Projects are in `%LOCALAPPDATA%\VanDang\FootageEditor\data\projects`. From the command line:
+
+```
+media-analysis edit <footage-folder> <project-folder> --profile talking-head --max-seconds 60
+media-analysis chat <project-folder> "make the opening shorter"
+media-analysis serve --ui apps/footage-editor/ui      # the app's local service, for development
+```
 
 ## Installing on Windows
 
@@ -117,6 +152,7 @@ Python, libraries, ffmpeg and Whisper model kept outside the install so builds s
 ```
 apps\recording-reports\deploy.cmd      # build, uninstall, install: installs and starts the app, puts `media-analysis` on PATH
 apps\recording-reports\uninstall.cmd   # removes the app; settings, templates, logs and reports are kept
+apps\footage-editor\deploy.cmd         # the same for Footage Editor (not started at sign-in, not on PATH)
 media-analysis report <input-folder> <output-folder>
 ```
 
@@ -222,4 +258,5 @@ one of the closest templates) and analyse again. The transcript and scan are reu
 uv run --project core pytest
 uv run --project core python core/tests/fixtures/make_sample.py <folder>    # synthetic test video (Windows text-to-speech)
 dotnet test apps/recording-reports
+dotnet test apps/footage-editor
 ```

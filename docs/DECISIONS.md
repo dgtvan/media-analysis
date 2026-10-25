@@ -6,6 +6,29 @@ and [DEPLOYMENT.md](DEPLOYMENT.md); this file keeps the reasons that the code do
 
 ---
 
+## 2026-10-25 · Footage Editor built on the edit workflow and a local service
+
+**Change.** New `edit` workflow (profiles, footage view, cut rules, first edit, chat tools, versions, exports), a
+local service (`media-analysis serve`) with a Project API, and the Footage Editor app: an HTML presentation in a .NET
+WebView2 window. The duration limit is both a profile setting (default) and a project option next to the profile
+(override).
+
+**Why.**
+- Claude plans with ids (phrases, shots, labels); code turns them into exact cuts and checks every id, so a wrong
+  answer becomes a warning, not a broken edit. The first edit and every chat change use the same operations.
+- Versions with parents instead of overwriting, so changes can be compared and undone.
+- The service runs analyses as child processes (stoppable, isolated) and streams events over a WebSocket; the
+  presentation only talks to the API, so it can be replaced without touching processing.
+- The duration limit: the length a video should have depends as much on where it is going as on the kind of footage.
+  As a profile setting only, every destination would need a copy of the profile; as a project option only, profiles
+  like Short-form 9:16 couldn't carry their natural limit. So profiles hold a default and the project can override
+  it. Claude can't add up cut lengths before the cuts are made, so a first plan that comes out too long gets one
+  revision with the real length, and chat changes report when the edit goes over.
+
+**Consequences.** Recording Reports is unchanged. Footage Editor doesn't start at sign-in and doesn't put
+`media-analysis` on PATH (`app.psd1` options). CapCut export, a "look" tool for the chat, and music/sound-effect
+libraries are next.
+
 ## 2026-10-25 · Shared understanding upgrades (C1); reports read a compact transcript
 
 **Change.**

@@ -35,6 +35,12 @@ try {
     & dotnet publish (Join-Path $AppSource $AppDef.Project) -c Release -o $Dist --nologo -v quiet | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Building the tray app failed (dotnet exit code $LASTEXITCODE)." }
 
+    foreach ($dir in $CopyDirs) {
+        Write-Step "Adding $dir"
+        & robocopy (Join-Path $AppSource $dir) (Join-Path $Dist $dir) /E /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "Copying $dir failed (robocopy exit code $LASTEXITCODE)." }
+    }
+
     Write-Step 'Adding the analysis core'
     $coreDir = Join-Path $Dist 'core'
     & robocopy (Join-Path $Core 'src\media_analysis') (Join-Path $coreDir 'media_analysis') /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP | Out-Null

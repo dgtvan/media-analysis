@@ -33,4 +33,15 @@ public sealed class CoreEventTests
         Assert.Equal("error", e!.Event);
         Assert.Equal("Unexpected error: KeyError: 'x'", e.Message);
     }
+
+    [Fact]
+    public void Built_in_templates_are_where_the_core_keeps_them()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, "core", "src")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        var core = new CoreConfig { PythonPath = Path.Combine(dir!.FullName, "core", "src") };
+        Assert.True(File.Exists(Path.Combine(core.BuiltinTemplatesDir, "meeting.md")));
+    }
 }

@@ -313,6 +313,12 @@ def mount_edit_api(app: FastAPI, svc: EditService) -> None:
     def info() -> dict:
         return {"api_version": API_VERSION, "projects_root": str(svc.root)}
 
+    @r.get("/busy")
+    def busy() -> dict:
+        """Whether an analysis or a chat turn is running (the app refuses to close for an install then)."""
+        running = [pid for pid, job in svc.jobs.items() if job.running] + sorted(svc.chatting)
+        return {"busy": bool(running), "projects": running}
+
     @r.get("/profiles")
     def profiles() -> list[dict]:
         return [

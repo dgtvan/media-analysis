@@ -72,7 +72,8 @@ sealed class CoreConfig
     }
 
     /// <summary>The built-in templates shipped with the core.</summary>
-    public string BuiltinTemplatesDir => System.IO.Path.Combine(PythonPath, "media_analysis", "templates", "builtin");
+    public string BuiltinTemplatesDir =>
+        System.IO.Path.Combine(PythonPath, "media_analysis", "workflows", "report", "templates", "builtin");
 }
 
 /// <summary>One line of the core's <c>--json</c> output (see core/src/media_analysis/engine/events.py and cli/sinks.py).</summary>

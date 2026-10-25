@@ -3,8 +3,15 @@
 Each app in `apps\` follows the [App deployment standard v2.3](https://github.com/dgtvan/local-app-deployment-strategy):
 build into `apps\<app>\dist\`, install per account into `%LOCALAPPDATA%\VanDang\<AppId>\app`, no publish folder and
 no self-update. The core's heavy runtime (Python, libraries, ffmpeg, Whisper model) lives in the standard's dependency
-folders (section 1.1), so it isn't copied on every install. Today there is one app, **Recording Reports**
-(`apps\recording-reports`, AppId `RecordingReports`).
+folders (section 1.1), so it isn't copied on every install. There are two apps:
+
+| App | Folder | AppId | Kind |
+|---|---|---|---|
+| Recording Reports | `apps\recording-reports` | `RecordingReports` | tray app, starts at sign-in, puts `media-analysis` on PATH |
+| Footage Editor | `apps\footage-editor` | `FootageEditor` | window (HTML in WebView2 over the core's local service), started from the Start Menu |
+
+What differs per app is in its `app.psd1`: `StartAtSignIn`, `AddToPath`, and `CopyDirs` (folders copied into the
+build, e.g. Footage Editor's `ui`).
 
 The installed app is a .NET 10 WinForms app. It owns everything about running in the background: start at sign-in,
 the projects window, closing on request. The **core** (`core\src\media_analysis`, Python) only analyses: the app
@@ -51,13 +58,14 @@ downloaded there once and used from then on. If that folder isn't writable, the 
 
 ## Scripts
 
-Run them from the app's folder (`apps\recording-reports\`); each passes that folder to the shared script in
+Run them from the app's folder (`apps\recording-reports\` or `apps\footage-editor\`); each passes that folder to the shared script in
 `scripts\` as `-App`, which reads the app's identity from its `app.psd1`.
 
 | Script | What it does |
 |---|---|
 | `build.cmd` | Deletes `dist\`, builds the app into it, adds the core code (compiled to bytecode), `core.json`, `media-analysis.cmd` and the runtime description. Writes nothing outside the repo. Needs .NET 10 SDK and uv. |
-| `install.cmd` | Installs .NET 10 Desktop Runtime and uv if missing, creates whatever the build's runtime needs (Python, package store, ffmpeg and model in the shared folder; the core environment in the app's folder), asks the running app (and an install under an earlier name) to close, mirrors `dist\` into `app\`, registers start at sign-in (HKCU Run) and the Start Menu shortcut, both with `--data-dir`, adds `app\` to PATH, removes the install under an earlier name and core environments the build no longer uses, and starts the app. `-NoStart`, `-Force`. |
+| `install.cmd` | Installs .NET 10 Desktop Runtime and uv if missing, creates whatever the build's runtime needs (Python, package store, ffmpeg and model in the shared folder; the core environment in the app's folder), asks the running app (and an install under an earlier name) to close, mirrors `dist\` into `app\`, registers the Start Menu shortcut and (if the app wants it) start at sign-in (HKCU Run), both with `--data-dir`,
+adds `app\` to PATH (if the app wants it), removes the install under an earlier name and core environments the build no longer uses, and starts the app. `-NoStart`, `-Force`. |
 | `uninstall.cmd` | Asks the app to close, removes the Run value, shortcut, PATH entry, `app\` and the app's `dependencies\`, and prints where the data, reports and shared dependencies were kept. Never deletes data, reports or shared dependencies. `-NoDataWarning`, `-KeepDependencies`, `-Force`. |
 | `deploy.cmd` | `build`, `uninstall -NoDataWarning -KeepDependencies`, `install`; a failed build stops it before anything is uninstalled. `-Force`. |
 
@@ -68,7 +76,10 @@ With `-Force` the app and its analysis are killed instead; analysing the project
 
 - One repo holds several apps, so the `.cmd` entry points live in each app's folder rather than at the repo root, and
   the scripts behind them are shared.
-- The install also adds a PATH entry, for the `media-analysis` command.
+- Recording Reports' install also adds a PATH entry, for the `media-analysis` command.
+- Footage Editor is a window, not a tray app: it doesn't start at sign-in. Closing on request works the same way
+  (`Local\FootageEditor-Exit`, refused while an analysis or a chat answer runs). It needs the Microsoft Edge WebView2
+  Runtime, which Windows 11 includes.
 - The Python core is compiled to bytecode at build time and runs with `PYTHONDONTWRITEBYTECODE=1`, so nothing is
   written into `app\` at run time.
 
