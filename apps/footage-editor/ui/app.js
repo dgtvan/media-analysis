@@ -467,6 +467,9 @@ const COLORS = { video: "var(--v1)", text: "var(--text-track)", audio: "var(--au
 const trackColor = (tr) => (tr.kind === "video" && tr.id !== "V1") ? "var(--v2)" : COLORS[tr.kind];
 let pxPerSec = 12, view = "full", layout = null, selected = null, total = 0;
 let t = 0, playing = false, startWall = 0, startT = 0, sourceMode = null;
+// "Play cut parts": playback walks the full footage view; fpos is the position there (seconds from its start).
+let playCuts = false, fpos = 0, startPos = 0;
+const fullPlay = () => playCuts && layout;
 
 const src = (id) => P.sources.find((s) => s.id === id);
 const main = () => P.edit?.tracks.find((x) => x.id === "V1");
@@ -515,7 +518,10 @@ function pieces(start, dur) {
   return out.length ? out : [[posOf(start), posOf(start) + dur]];
 }
 
-function goTo(pos) { const r = hit(pos); if (r.source) playSource(r.source, r.st); else seek(r.t); }
+function goTo(pos) {
+  if (fullPlay()) { seekPos(pos); return; }
+  const r = hit(pos); if (r.source) playSource(r.source, r.st); else seek(r.t);
+}
 
 function filmstrip(el, s, from) {
   if (!s?.strip) return;
@@ -618,11 +624,13 @@ function renderTimeline() {
 }
 
 function movePlayhead() {
-  const x = posOf(t) * pxPerSec;
+  const x = (fullPlay() ? fpos : posOf(t)) * pxPerSec;
   for (const p of document.querySelectorAll(".playhead")) p.style.left = x + "px";
   $("time").textContent = `${fmt(t)} / ${fmt(total)}`;
+  const cut = fullPlay() && hit(fpos);
   const m = main()?.items.find((it) => t >= it.at && t < it.at + it.duration);
-  $("nowClip").textContent = sourceMode || !m ? "" : `Now: ${m.label} ${src(m.source)?.name} @ ${fmtSrc(m.in + t - m.at)}`;
+  $("nowClip").textContent = sourceMode ? "" : cut?.source ? `Cut part: ${cut.source.name} @ ${fmtSrc(cut.st)}`
+    : m ? `Now: ${m.label} ${src(m.source)?.name} @ ${fmtSrc(m.in + t - m.at)}` : "";
   if (playing && !sourceMode) {
     const w = $("lanesWrap");
     if (x > w.scrollLeft + w.clientWidth - 40 || x < w.scrollLeft) w.scrollLeft = Math.max(0, x - 80);
@@ -636,13 +644,15 @@ function active(trackId) {
   return tr?.items.find((it) => t >= it.at && t < it.at + it.duration);
 }
 
-function drive(el, it, force) {
+function drive(el, it, force, want = it && it.in + (t - it.at)) {
   const s = it && src(it.source);
   if (!it || !s?.proxy) { el.classList.add("hidden"); if (!el.paused) el.pause(); el.dataset.item = ""; return; }
-  const want = it.in + (t - it.at);
-  if (!el.src.endsWith(s.proxy)) el.src = s.proxy;
+  const newSource = !el.src.endsWith(s.proxy);
+  if (newSource) el.src = s.proxy;
   el.classList.remove("hidden");
-  if (force || el.dataset.item !== it.id || Math.abs(el.currentTime - want) > 0.3) el.currentTime = want;
+  // Between edit clips the picture jumps; walking the full footage it runs on, so only a real drift moves it.
+  const jumped = !fullPlay() && el.dataset.item !== it.id;
+  if (force || newSource || jumped || Math.abs(el.currentTime - want) > 0.3) el.currentTime = want;
   el.dataset.item = it.id;
   if (playing && el.paused) el.play().catch(() => {});
   if (!playing && !el.paused) el.pause();
@@ -651,6 +661,17 @@ function drive(el, it, force) {
 function syncPlayer(force) {
   if (sourceMode) return;
   if (!P.edit) { for (const id of ["v1", "v2"]) $(id).classList.add("hidden"); $("caption").style.display = "none"; $("badges").innerHTML = ""; return; }
+  if (fullPlay()) {
+    const r = hit(fpos);
+    if (r.source) {
+      drive($("v1"), { id: "cut", source: r.source.id }, force, r.st);
+      drive($("v2"), null, force);
+      $("caption").style.display = "none";
+      $("badges").innerHTML = `<span class="badge cut">Cut part, not in the edit</span>`;
+      return;
+    }
+    t = r.t;
+  }
   drive($("v1"), active("V1"), force);
   const overlay = P.edit.tracks.filter((tr) => tr.kind === "video" && tr.id !== "V1").map((tr) => active(tr.id)).find(Boolean);
   drive($("v2"), overlay, force);
@@ -663,7 +684,12 @@ function syncPlayer(force) {
 }
 
 function tick() {
-  if (playing && !sourceMode) {
+  if (playing && !sourceMode && fullPlay()) {
+    fpos = startPos + (performance.now() - startWall) / 1000;
+    if (fpos >= layout.width) { fpos = layout.width; setPlaying(false); }
+    syncPlayer(false);
+    movePlayhead();
+  } else if (playing && !sourceMode) {
     t = startT + (performance.now() - startWall) / 1000;
     if (t >= total) { t = total; setPlaying(false); }
     syncPlayer(false);
@@ -676,7 +702,8 @@ function setPlaying(on) {
   if (sourceMode) { const v = $("src"); on ? v.play() : v.pause(); $("play").textContent = on ? "❚❚ Pause" : "▶ Play"; return; }
   if (!P.edit) return;
   playing = on;
-  if (on) { if (t >= total) t = 0; startT = t; startWall = performance.now(); }
+  if (on && fullPlay()) { if (fpos >= layout.width) fpos = 0; startPos = fpos; startWall = performance.now(); }
+  else if (on) { if (t >= total) t = 0; startT = t; startWall = performance.now(); }
   $("play").textContent = on ? "❚❚ Pause" : "▶ Play";
   syncPlayer(true);
 }
@@ -685,6 +712,22 @@ function pause() { if (playing) setPlaying(false); if (sourceMode) exitSource();
 function seek(to) {
   if (sourceMode) exitSource();
   t = Math.max(0, Math.min(total, to)); startT = t; startWall = performance.now();
+  if (fullPlay()) fpos = startPos = posOf(t);
+  syncPlayer(true); movePlayhead();
+}
+
+function seekPos(pos) {
+  if (sourceMode) exitSource();
+  fpos = startPos = Math.max(0, Math.min(layout.width, pos)); startWall = performance.now();
+  syncPlayer(true); movePlayhead();
+}
+
+function setPlayCuts(on) {
+  playCuts = on;
+  $("playCuts").setAttribute("aria-pressed", String(on));
+  if (on && view !== "full") { view = $("view").value = "full"; renderTimeline(); }
+  if (on && layout) fpos = startPos = posOf(t);
+  startT = t; startWall = performance.now();
   syncPlayer(true); movePlayhead();
 }
 
@@ -713,7 +756,8 @@ $("play").addEventListener("click", () => setPlaying(sourceMode ? $("src").pause
 $("backToEdit").addEventListener("click", exitSource);
 $("src").addEventListener("ended", () => { $("play").textContent = "▶ Play"; });
 $("zoom").addEventListener("input", (e) => { pxPerSec = Number(e.target.value); renderTimeline(); });
-$("view").addEventListener("change", (e) => { view = e.target.value; renderTimeline(); });
+$("view").addEventListener("change", (e) => { view = e.target.value; renderTimeline(); if (view !== "full" && playCuts) setPlayCuts(false); });
+$("playCuts").addEventListener("click", () => setPlayCuts(!playCuts));
 $("lanesWrap").addEventListener("scroll", (e) => { $("rulerWrap").scrollLeft = e.target.scrollLeft; $("headers").scrollTop = e.target.scrollTop; });
 $("rulerWrap").addEventListener("click", (e) => { if (scrubbed) return; const r = $("ruler").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
 $("lanes").addEventListener("click", (e) => { if (scrubbed) return; const r = $("lanes").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
@@ -744,7 +788,8 @@ for (const host of ["ruler", "lanes"]) $(host).addEventListener("pointerdown", (
   const move = (ev) => {
     const w = wrap.getBoundingClientRect();
     if (ev.clientX > w.right - 30) wrap.scrollLeft += 20; else if (ev.clientX < w.left + 30) wrap.scrollLeft -= 20;
-    seek(editTimeAt((ev.clientX - $("lanes").getBoundingClientRect().left) / pxPerSec));
+    const pos = (ev.clientX - $("lanes").getBoundingClientRect().left) / pxPerSec;
+    if (fullPlay()) seekPos(pos); else seek(editTimeAt(pos));
   };
   const up = () => {
     window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
@@ -763,7 +808,7 @@ function setTimelineHeight(h) {
   h = Math.max(140, Math.min(window.innerHeight - 220, h));
   $("project").style.setProperty("--tl-h", h + "px");
   const rows = P.edit ? P.edit.tracks.length : 6;
-  $("timeline").style.setProperty("--row", Math.max(28, Math.min(96, Math.floor((h - 30 - 14) / rows))) + "px");
+  $("timeline").style.setProperty("--row", Math.max(28, Math.min(96, Math.floor((h - 30 - 32 - 14) / rows))) + "px");
   localStorage.setItem("timelineHeight", h);
 }
 $("split").addEventListener("pointerdown", (e) => {
