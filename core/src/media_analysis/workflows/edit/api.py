@@ -7,6 +7,7 @@ from the project folder. The UI never reads files itself.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import secrets
 import shutil
@@ -21,6 +22,7 @@ from pydantic import BaseModel
 
 from media_analysis.engine.errors import MediaAnalysisError
 from media_analysis.engine.service import EventHub, Job
+from media_analysis.media import ffmpeg
 from media_analysis.understand.ingest import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
 from media_analysis.workflows.edit.chat import EditChat
 from media_analysis.workflows.edit.export import edit_json, write_exports
@@ -64,6 +66,7 @@ class EditService:
         self.jobs: dict[str, Job] = {}
         self.chatting: set[str] = set()
         self._open: dict[str, tuple[Any, Any, str]] = {}
+        self._probes: dict[str, dict | None] = {}
         self._lock = threading.Lock()
 
     # --- projects -------------------------------------------------------------------------------------------------
@@ -121,12 +124,49 @@ class EditService:
         shutil.rmtree(d, ignore_errors=True)
 
     def footage(self, project_id: str) -> list[dict]:
+        """The imported files, with their length and a thumbnail link as soon as they are imported (no analysis)."""
         d = self.dir(project_id)
         out = []
         for i, path in enumerate(load_project_info(d).files or []):
             p = Path(path)
-            out.append({"index": i, "path": path, "name": p.name, "exists": p.is_file()})
+            item = {"index": i, "path": path, "name": p.name, "exists": p.is_file(), "duration": None, "has_video": None,
+                    "thumb": None}
+            if p.is_file():
+                info = self._probe(p)
+                if info:
+                    item.update(duration=info["duration"], has_video=info["has_video"])
+                    if info["has_video"]:
+                        item["thumb"] = f"/media/{project_id}/thumb/{_file_key(p)}.jpg"
+            out.append(item)
         return out
+
+    def _probe(self, path: Path) -> dict | None:
+        key = _file_key(path)
+        if key not in self._probes:
+            try:
+                self._probes[key] = ffmpeg.probe(path)
+            except MediaAnalysisError:
+                self._probes[key] = None
+        return self._probes[key]
+
+    def thumbnail(self, project_id: str, key: str) -> Path:
+        """A frame from early in the clip (not the very first, which is often black), made once per file version."""
+        d = self.dir(project_id)
+        out = d / "media" / "thumbs" / f"{key}.jpg"
+        if out.exists():
+            return out
+        for path in load_project_info(d).files or []:
+            p = Path(path)
+            if p.is_file() and _file_key(p) == key:
+                info = self._probe(p)
+                if not info or not info["has_video"]:
+                    break
+                at = min(1.0, info["duration"] * 0.1)
+                try:
+                    return ffmpeg.extract_still(p, at, out, max_side=320)
+                except MediaAnalysisError:
+                    break
+        raise HTTPException(404, "No thumbnail.")
 
     def add_files(self, project_id: str, body: AddFiles) -> list[dict]:
         d = self.dir(project_id)
@@ -301,6 +341,12 @@ class EditService:
         return {"accepted": True, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
 
+def _file_key(path: Path) -> str:
+    """Identifies a file version cheaply (path, size, modification time) for thumbnails and probe results."""
+    st = path.stat()
+    return hashlib.sha1(f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:16]
+
+
 def _content(item: dict) -> dict:
     """An item without its position: moving because an earlier clip changed isn't a change to the item."""
     return {k: v for k, v in item.items() if k not in ("at", "offset")}
@@ -358,6 +404,12 @@ def mount_edit_api(app: FastAPI, svc: EditService) -> None:
         return FileResponse(path, media_type="application/json", filename="edit.json")
 
     app.include_router(r)
+
+    @app.get("/media/{project_id}/thumb/{key}.jpg")
+    def thumb(project_id: str, key: str) -> FileResponse:
+        if not re.fullmatch(r"[0-9a-f]{16}", key):
+            raise HTTPException(404, "No thumbnail.")
+        return FileResponse(svc.thumbnail(project_id, key), headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/media/{project_id}/{name}")
     def media(project_id: str, name: str) -> FileResponse:

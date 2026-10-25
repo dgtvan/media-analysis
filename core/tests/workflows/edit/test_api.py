@@ -37,3 +37,28 @@ def test_projects_footage_and_token(tmp_path):
     assert c.get("/api/projects/../etc", headers=h).status_code == 404
     assert c.delete(f"/api/projects/{p['id']}", headers=h).status_code == 200
     assert c.get("/api/projects", headers=h).json() == []
+
+
+def test_imported_footage_gets_a_thumbnail_and_length_before_analysis(tmp_path):
+    import subprocess
+
+    import pytest
+
+    from media_analysis.engine.errors import MediaAnalysisError
+    from media_analysis.media import ffmpeg
+
+    try:
+        exe = ffmpeg.find_binary("ffmpeg")
+    except MediaAnalysisError:
+        pytest.skip("ffmpeg not found")
+    clip = tmp_path / "clip.mp4"
+    subprocess.run([exe, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=3",
+                    "-pix_fmt", "yuv420p", str(clip)], check=True)
+    c = client(tmp_path)
+    h = {"X-Token": "secret"}
+    p = c.post("/api/projects", json={"name": "t"}, headers=h).json()
+    files = c.post(f"/api/projects/{p['id']}/footage", json={"paths": [str(clip)]}, headers=h).json()
+    assert files[0]["duration"] == pytest.approx(3.0, abs=0.1) and files[0]["has_video"] is True
+    r = c.get(files[0]["thumb"], headers=h)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and len(r.content) > 1000
+    assert c.get(f"/media/{p['id']}/thumb/0123456789abcdef.jpg", headers=h).status_code == 404

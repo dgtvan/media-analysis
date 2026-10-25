@@ -216,8 +216,11 @@ function renderSources() {
       .sort((a, b) => a.it.at - b.it.at) : [];
     const el = document.createElement("div");
     el.className = "source" + (sourceMode && s && sourceMode.id === s.id ? " active" : "");
-    const thumb = s?.strip ? `<div class="ph" style="background:url(${s.strip}) left/auto 100% no-repeat"></div>` : `<div class="ph">${s ? "" : "new"}</div>`;
-    const meta = !f.exists ? `<span class="missing">file not found</span>` : s ? fmtSrc(s.duration) : "not analysed yet";
+    const thumb = f.thumb ? `<img src="${f.thumb}" alt="" loading="lazy">`
+      : `<div class="ph">${f.has_video === false ? "audio" : ""}</div>`;
+    const length = f.duration != null ? fmtSrc(f.duration) : "";
+    const meta = !f.exists ? `<span class="missing">file not found</span>`
+      : s ? length : [length, "not analysed yet"].filter(Boolean).join(" · ");
     el.innerHTML = `${thumb}<div style="min-width:0"><div style="display:flex"><div class="name">${esc(f.name)}</div>
       <button class="remove" title="Remove from the project">✕</button></div><div class="meta">${meta}</div>
       <div class="cuts">${uses.map(({ tr, it }) => `<span class="cut-id${selected === it.id ? " selected" : ""}" style="--c:${trackColor(tr)}" data-id="${it.id}" title="${tr.id} ${esc(tr.name)}, ${fmtSrc(it.in)}–${fmtSrc(it.out)}">${it.label}</span>`).join("")}</div></div>`;
