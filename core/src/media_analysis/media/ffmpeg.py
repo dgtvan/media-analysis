@@ -88,12 +88,15 @@ def _rotation(stream: dict) -> int:
     return abs(int(tag)) % 360 if tag else 0
 
 
-def decode_audio(path: Path, sample_rate: int = 16000) -> np.ndarray:
-    """Whole audio track as mono float32 at `sample_rate`."""
-    out = _run([
-        find_binary("ffmpeg"), "-nostdin", "-v", "error", "-i", str(path),
-        "-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "-",
-    ])
+def decode_audio(path: Path, sample_rate: int = 16000, start: float = 0.0, duration: float | None = None) -> np.ndarray:
+    """The audio track (or `duration` seconds of it from `start`) as mono float32 at `sample_rate`."""
+    args = [find_binary("ffmpeg"), "-nostdin", "-v", "error"]
+    if start > 0:
+        args += ["-ss", f"{start:.3f}"]
+    args += ["-i", str(path)]
+    if duration is not None:
+        args += ["-t", f"{duration:.3f}"]
+    out = _run(args + ["-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "-"])
     return np.frombuffer(out, dtype=np.float32).copy()
 
 
@@ -150,3 +153,46 @@ def extract_still(path: Path, time: float, out: Path, max_side: int | None = Non
     if not out.exists():
         raise MediaAnalysisError(f"Could not extract a frame at {time:.1f}s from {path.name}")
     return out
+
+
+def make_proxy(path: Path, out: Path, height: int = 720, fps: int = 30) -> Path:
+    """A small, constant-frame-rate H.264 copy with a keyframe every half second, for smooth playback and seeking in
+    a browser. Phone footage often has a variable frame rate, which players and editors handle badly."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".part" + out.suffix)
+    _run([
+        find_binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-i", str(path),
+        "-vf", f"scale=-2:'min({height},ih)',fps={fps}", "-fps_mode", "cfr",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-g", str(fps // 2), "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", str(tmp),
+    ])
+    tmp.replace(out)
+    return out
+
+
+def filmstrip(path: Path, out: Path, duration: float, every: float = 2.0, height: int = 90) -> Path:
+    """One image with a frame every `every` seconds side by side, for drawing a clip on a timeline."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    count = max(1, int(duration // every))
+    _run([
+        find_binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-i", str(path),
+        "-vf", f"fps={1 / every},scale=-2:{height},tile={count}x1", "-frames:v", "1", "-q:v", "4", str(out),
+    ])
+    return out
+
+
+def loudness(path: Path) -> float | None:
+    """Integrated loudness in LUFS (EBU R128), or None when the file has no measurable sound."""
+    proc = subprocess.run(
+        [find_binary("ffmpeg"), "-nostdin", "-v", "info", "-i", str(path), "-vn", "-af", "ebur128", "-f", "null", "-"],
+        capture_output=True, creationflags=_NO_WINDOW,
+    )
+    text = proc.stderr.decode("utf-8", "replace")
+    marker = text.rfind("Integrated loudness:")
+    if marker < 0:
+        return None
+    for line in text[marker:].splitlines():
+        if line.strip().startswith("I:"):
+            value = line.split(":", 1)[1].split()[0]
+            return None if value.startswith("-inf") or float(value) < -69 else float(value)
+    return None

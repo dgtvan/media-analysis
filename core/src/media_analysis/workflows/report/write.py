@@ -6,7 +6,7 @@ from media_analysis.engine.errors import MediaAnalysisError
 from media_analysis.engine.timecode import format_timecode
 from media_analysis.engine.workflow import Stage
 from media_analysis.providers.llm import Text
-from media_analysis.understand.models import Ingest, Transcript
+from media_analysis.understand.models import Ingest
 from media_analysis.workflows.report import prompts
 from media_analysis.workflows.report.models import Evidence, ReportDraft
 from media_analysis.workflows.report.templates.registry import Template
@@ -14,8 +14,10 @@ from media_analysis.workflows.report.templates.registry import Template
 
 class WriteStage(Stage):
     name = "report"
+    # 2: reads the phrase view of the transcript (understand/views.py). 3: cites one time per moment.
+    version = 3
 
-    def run(self, ingest: Ingest, transcript: Transcript, evidence: Evidence, template: Template) -> ReportDraft:
+    def run(self, ingest: Ingest, transcript: str, evidence: Evidence, template: Template) -> ReportDraft:
         rep = self.rep
         key = self.key(transcript, evidence, template.fingerprint_parts(), self.settings.llm.model, self.settings.llm.effort)
         cached = None if self.force else self.cache.load(self.name, key, ReportDraft)
@@ -44,7 +46,7 @@ class WriteStage(Stage):
             Text("# Template\n" + template_text),
             Text("# Files\n" + files_text),
             Text("# Evidence frames\n" + ev_text),
-            Text("# Transcript\n" + transcript.to_prompt_text(ingest)),
+            Text("# Transcript\n" + transcript),
         ]
         markdown = self.ctx.llm.generate_text(prompts.REPORT_SYSTEM, content, rep.activity).strip()
         if not markdown:

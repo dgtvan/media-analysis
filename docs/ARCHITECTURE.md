@@ -73,19 +73,24 @@ core/
       transcriber.py    faster-whisper wrapper, silence-aware chunking
       llm.py            Claude backends (subscription, api) behind one LLM interface
     media/              local media tools, no AI
-      ffmpeg.py         probe, decode audio, iterate frames, extract stills
-      segmentation.py   visual segmentation
+      ffmpeg.py         probe, decode audio, iterate frames, extract stills, proxies, filmstrips, loudness
+      segmentation.py   visual segmentation of screen recordings
+      shots.py          shot detection and quality of camera footage
       frames.py         perceptual hash, sharpness, edges, contact sheets
+      audio.py          pauses and waveform envelope
+      look.py           the "look" image of one time range (frames, waveform, words)
     understand/         what is in the files, the same for every workflow
-      models.py         MediaFile, Ingest, Transcript, VisualScan
-      ingest.py, transcribe.py, scan.py   stages 1-3
+      models.py         MediaFile, Ingest, Transcript, VisualScan, ShotList, Sound, Descriptions
+      ingest.py, transcribe.py, scan.py, condense.py   stages used by reports
+      shots.py, sound.py, describe.py                  stages for footage
+      views.py          the compact text views Claude reads (transcript phrases, scan table, shot list)
       sessions.py       Meeting Recorder files and their speakers
     workflows/
       report/
         workflow.py     ReportWorkflow: the stage list and what it adds to the run record
         models.py       Classification, FramePlan, Candidates, Evidence, ReportDraft
         prompts.py      system prompts and JSON schemas for the Claude calls
-        classify.py, plan.py, extract.py, read.py, write.py, assemble.py   stages 4-9
+        classify.py, plan.py, extract.py, read.py, write.py, assemble.py   stages 5-10
         templates/
           registry.py   loads and validates templates
           builtin/      meeting, technical-discussion, lecture-tutorial, interview, language-practice,
@@ -107,9 +112,11 @@ object per line with `--json`), and the Windows app reads the JSON.
 ### 3.2 Report workflow
 
 ```
-1 ingest ─► 2 transcribe ─► 3 scan ─► 4 classify ─► 5 plan ─► 6 extract ─► 7 read ─► 8 report ─► 9 assemble
-  local       local          local      Claude       Claude     local        Claude     Claude      local
+1 ingest ─► 2 transcribe ─► 3 scan ─► 4 condense ─► 5 classify ─► 6 plan ─► 7 extract ─► 8 read ─► 9 report ─► 10 assemble
+  local       local          local      Claude*       Claude        Claude     local        Claude     Claude      local
 ```
+
+\* only for transcripts too long for one call; otherwise skipped.
 
 Each stage takes the previous stages' results and returns its own typed result, which is cached (3.4). Stages that
 need video (scan, plan, extract, read) are skipped for audio-only sessions.
@@ -119,18 +126,27 @@ need video (scan, plan, extract, read) are skipped for audio-only sessions.
 | 1 | ingest | Lists the folder's video/audio files in name order, probes them with ffprobe (duration, streams, size), fingerprints each file, labels Meeting Recorder audio (`audio-mic` = Me, `audio-system` = Others) | `Ingest` |
 | 2 | transcribe | Decodes 16 kHz mono audio with ffmpeg and transcribes it with faster-whisper, in ~10 minute chunks cut at the quietest moment nearby, each chunk cached so an interrupted run resumes mid-file | `Transcript` |
 | 3 | scan | Splits each video into visual segments (stretches whose content stays the same), with no AI | `VisualScan` |
-| 4 | classify | One Claude call picks the template that fits, from the transcript, the segment list and a contact sheet of up to 16 thumbnails | `Classification` |
-| 5 | plan | One Claude call decides which moments need a frame as evidence, guided by the template | `FramePlan` |
-| 6 | extract | Decodes each requested range densely, groups near-duplicate frames and keeps the sharpest distinct ones | `Candidates` |
-| 7 | read | Claude looks at the candidate frames in batches, drops irrelevant ones and reads their text verbatim | `Evidence` |
-| 8 | report | One Claude call writes the report in Markdown from the template, transcript and evidence | `ReportDraft` |
-| 9 | assemble | Writes `report.md` and copies only the frames and text the report references | output folder |
+| 4 | condense | Builds the transcript view Claude reads (phrases, see below); if it is longer than `transcript_budget_chars` (300,000 by default), Claude condenses it part by part into timecoded notes | text |
+| 5 | classify | One Claude call picks the template that fits, from the transcript, the segment list and a contact sheet of up to 16 thumbnails | `Classification` |
+| 6 | plan | One Claude call decides which moments need a frame as evidence, guided by the template | `FramePlan` |
+| 7 | extract | Decodes each requested range densely, groups near-duplicate frames and keeps the sharpest distinct ones | `Candidates` |
+| 8 | read | Claude looks at the candidate frames in batches, drops irrelevant ones and reads their text verbatim | `Evidence` |
+| 9 | report | One Claude call writes the report in Markdown from the template, transcript and evidence | `ReportDraft` |
+| 10 | assemble | Writes `report.md` and copies only the frames and text the report references | output folder |
 
 **Transcription.** faster-whisper runs with voice-activity detection. Without a language setting it re-detects the
 language every 30 seconds, so mixed English/Vietnamese speech works. Previous text isn't fed back into the model,
 which avoids repetition loops on long recordings. On a CUDA GPU it uses `float16`, otherwise `int8` on all CPU cores
 (on a 16-thread laptop CPU, large-v3 runs at about 0.8× real time, large-v3-turbo about 1.3×). Only NVIDIA GPUs are
 used; others fall back to the CPU.
+
+**What Claude reads of the transcript.** Speech is shown as phrases rather than raw recognition segments: consecutive
+segments of one speaker are joined while the gaps stay under a second and the phrase under 30 seconds, and each line
+gives its start and end (`[00:12:03-00:12:41] Others: ...`). Stretches of 20 seconds or more without speech get their
+own line, since they often mean a screen share or a demo. On a 30-minute stand-up this cut the lines Claude reads by
+about 85% (see [DECISIONS.md](DECISIONS.md)). Word-level times and verbatim fillers ("um") can be switched on in the
+transcription settings for workflows that cut between words; they are off for reports and don't change the cache key
+when off.
 
 **Visual scan.** Video is decoded at about 1 frame per second at 320×180. Frames are compared structurally rather than
 pixel by pixel, so noise, compression and small moving things don't count as changes:
@@ -164,9 +180,17 @@ template's sections and instructions, the file list, the accepted evidence (id, 
 the transcript, and refers to evidence by id. Assembly turns ids into relative links, drops references to unknown
 ids with a warning, and copies only referenced frames into `reference/`.
 
-**Meeting Recorder folders.** A folder with `video.mp4` (screen, no sound), `audio-mic.*` and `audio-system.*` is one
-session recorded on one timeline. The two transcripts are merged into one conversation labelled *Me* and *Others*
-before they go to Claude, and frames come from the video.
+**Meeting Recorder folders.** A folder with `video.mp4`, `audio-mic.*` and `audio-system.*` is one session recorded on
+one timeline. The two transcripts are merged into one conversation labelled *Me* and *Others* before they go to
+Claude, and frames come from the video. When the video has sound too, it is only the mix of the two audio files, so it
+isn't transcribed: that would take as long again and give Claude the conversation twice, without speakers.
+
+**Shared understanding for other workflows.** `understand/` also has stages the report workflow doesn't use yet:
+`shots` (camera footage split into shots with sharpness, shake and brightness; `media/shots.py`), `sound` (pauses and
+loudness per file) and `describe` (Claude describes every shot from a contact sheet of three frames per shot, cached
+per clip). `media/` has proxies (small constant-frame-rate copies for playback), filmstrips (frames side by side for
+timelines) and the "look" image (frames, waveform, pauses and words for one time range, for Claude to check a moment
+without watching the video).
 
 ### 3.3 Claude access
 
@@ -308,5 +332,4 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
 
 - Speaker diarization (who said what) for recordings that aren't split per speaker.
 - A helper that drafts a template from a finished run.
-- Splitting the report call for transcripts too long for one Claude call (today it is a single call).
 - Keeping each run's report, so older statistics records can point at the report they produced.

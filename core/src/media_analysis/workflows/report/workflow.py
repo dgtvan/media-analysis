@@ -1,6 +1,6 @@
 """The report workflow: a folder of recordings of one session → report.md written to a template, plus reference/.
 
-ingest → transcribe → scan (understanding, shared) → classify → plan → extract → read → report → assemble
+ingest → transcribe → scan → condense (understanding, shared) → classify → plan → extract → read → report → assemble
 """
 
 from __future__ import annotations
@@ -14,10 +14,12 @@ from media_analysis.engine.events import EventSink, null_sink
 from media_analysis.engine.settings import Settings
 from media_analysis.engine.workflow import RunContext, RunOptions, Workflow
 from media_analysis.providers.llm import create_llm
+from media_analysis.understand.condense import CondenseStage
 from media_analysis.understand.ingest import IngestStage
 from media_analysis.understand.models import Ingest
 from media_analysis.understand.scan import ScanStage
 from media_analysis.understand.transcribe import TranscribeStage
+from media_analysis.understand.views import transcript_view
 from media_analysis.workflows.report.assemble import AssembleStage
 from media_analysis.workflows.report.classify import ClassifyStage
 from media_analysis.workflows.report.extract import ExtractStage
@@ -45,7 +47,7 @@ class ReportResult:
 class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
     name = "report"
     stages = [
-        IngestStage, TranscribeStage, ScanStage, ClassifyStage, PlanStage, ExtractStage, ReadStage, WriteStage,
+        IngestStage, TranscribeStage, ScanStage, CondenseStage, ClassifyStage, PlanStage, ExtractStage, ReadStage, WriteStage,
         AssembleStage,
     ]
 
@@ -70,17 +72,18 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
     def execute(self, ctx: RunContext, opts: ReportOptions) -> ReportResult:
         templates = self._templates
         ingest = self._ingest = IngestStage(ctx).run(opts.input_dir)
-        ctx.timer.audio_seconds = sum(f.duration for f in ingest.files if f.has_audio)
+        ctx.timer.audio_seconds = sum(f.duration for f in ingest.files if f.uses_audio)
         transcript = TranscribeStage(ctx).run(ingest)
         scan = ScanStage(ctx).run(ingest)
+        text = CondenseStage(ctx).run(transcript_view(ingest, transcript)).text
         classification = self._classification = ClassifyStage(ctx).run(
-            ingest, transcript, scan, templates, opts.template_id,
+            ingest, text, scan, templates, opts.template_id,
         )
         template = templates[classification.template_id]  # type: ignore[index]
-        plan = PlanStage(ctx).run(ingest, transcript, scan, template)
+        plan = PlanStage(ctx).run(ingest, text, scan, template)
         candidates = ExtractStage(ctx).run(ingest, plan)
         evidence = ReadStage(ctx).run(ingest, plan, candidates, template)
-        draft = WriteStage(ctx).run(ingest, transcript, evidence, template)
+        draft = WriteStage(ctx).run(ingest, text, evidence, template)
         report_path, warnings = AssembleStage(ctx).run(opts.output_dir, draft, evidence, ingest, template, classification)
         return ReportResult(report_path, classification, len(evidence.items), warnings)
 

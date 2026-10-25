@@ -116,7 +116,7 @@ class Workflow(Generic[O, R]):
 
     def _run(self, opts: O) -> R:
         opts = replace(opts, input_dir=opts.input_dir.resolve(), output_dir=opts.output_dir.resolve())
-        check_folders(opts.input_dir, opts.output_dir)
+        self.check(opts)
         self.prepare(opts)
         opts.output_dir.mkdir(parents=True, exist_ok=True)
         if opts.fresh:
@@ -126,6 +126,10 @@ class Workflow(Generic[O, R]):
         if opts.clean_cache:
             shutil.rmtree(cache.root, ignore_errors=True)
         return result
+
+    def check(self, opts: O) -> None:
+        """Checks the input and output folders."""
+        check_folders(opts.input_dir, opts.output_dir)
 
     def prepare(self, opts: O) -> None:
         """Checks the options before anything is written."""
@@ -162,11 +166,16 @@ def check_folders(input_dir: Path, output_dir: Path) -> None:
         raise MediaAnalysisError(f"Input folder not found: {input_dir}")
     if output_dir == input_dir:
         raise MediaAnalysisError("Output folder must be different from the input folder.")
+    check_output(output_dir)
+
+
+def check_output(output_dir: Path, own_entries: tuple[str, ...] = (CACHE_DIR_NAME,)) -> None:
+    """The output folder must be new, empty, or one this program made (it has one of `own_entries`)."""
     if output_dir.exists():
         if not output_dir.is_dir():
             raise MediaAnalysisError(f"Output path is not a folder: {output_dir}")
         entries = [p.name for p in output_dir.iterdir()]
-        if entries and CACHE_DIR_NAME not in entries:
+        if entries and not any(e in entries for e in own_entries):
             raise MediaAnalysisError(
                 f"Output folder {output_dir} is not empty and was not created by media-analysis. "
                 "Use an empty or new folder."

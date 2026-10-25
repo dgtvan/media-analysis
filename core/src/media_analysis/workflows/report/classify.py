@@ -11,7 +11,8 @@ from media_analysis.engine.workflow import Stage
 from media_analysis.media import ffmpeg
 from media_analysis.media.frames import contact_sheet
 from media_analysis.providers.llm import Image, Text
-from media_analysis.understand.models import Ingest, Transcript, VisualScan
+from media_analysis.understand.models import Ingest, VisualScan
+from media_analysis.understand.views import scan_view
 from media_analysis.workflows.report import prompts
 from media_analysis.workflows.report.models import Classification, SuggestedTemplate
 from media_analysis.workflows.report.templates.registry import Template
@@ -19,10 +20,11 @@ from media_analysis.workflows.report.templates.registry import Template
 
 class ClassifyStage(Stage):
     name = "classify"
-    version = 2
+    # 3: reads the phrase view of the transcript (understand/views.py).
+    version = 3
 
     def run(
-        self, ingest: Ingest, transcript: Transcript, scan: VisualScan, templates: dict[str, Template],
+        self, ingest: Ingest, transcript: str, scan: VisualScan, templates: dict[str, Template],
         forced_id: str | None,
     ) -> Classification:
         rep = self.rep
@@ -42,8 +44,8 @@ class ClassifyStage(Stage):
             rep.started("asking Claude which template fits")
             content: list = [
                 Text("# Available templates\n" + "\n".join(t.summary_for_classification() for t in templates.values())),
-                Text("# Transcript\n" + transcript.to_prompt_text(ingest)),
-                Text("# Visual segments\n" + scan.to_prompt_text()),
+                Text("# Transcript\n" + transcript),
+                Text("# Visual segments\n" + scan_view(scan)),
             ]
             sheet = self._contact_sheet(ingest, scan)
             if sheet:

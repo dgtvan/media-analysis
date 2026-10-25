@@ -11,6 +11,9 @@ from media_analysis.engine.hardware import Hardware
 from media_analysis.engine.settings import USER_MODELS_DIR, TranscriptionSettings
 
 SAMPLE_RATE = 16000
+# Whisper tidies away fillers unless the text it continues from has them; starting from such text keeps "um" and "uh",
+# which editing needs to see in order to cut them.
+VERBATIM_PROMPT = "Umm, let me think, like, hmm... Okay, so, uh, I mean, you know, the thing is..."
 
 
 class FasterWhisperTranscriber:
@@ -55,8 +58,9 @@ class FasterWhisperTranscriber:
         audio: np.ndarray,
         offset: float,
         on_progress: Callable[[float], None] | None = None,
-    ) -> tuple[str | None, list[tuple[float, float, str]]]:
-        """Transcribe one chunk into (start, end, text) segments; times are shifted by `offset` seconds."""
+    ) -> tuple[str | None, list[tuple[float, float, str, list[tuple[float, float, str]] | None]]]:
+        """Transcribe one chunk into (start, end, text, words) segments; times are shifted by `offset` seconds. `words`
+        is a list of (start, end, word) when word timestamps are on, otherwise None."""
         model = self._load()
         segments, info = model.transcribe(
             audio,
@@ -67,12 +71,17 @@ class FasterWhisperTranscriber:
             vad_filter=True,
             # Feeding previous text back in tends to cause repetition loops on long or mixed-language audio.
             condition_on_previous_text=False,
+            word_timestamps=self.settings.word_timestamps,
+            initial_prompt=VERBATIM_PROMPT if self.settings.verbatim else None,
         )
-        out: list[tuple[float, float, str]] = []
+        out: list[tuple[float, float, str, list[tuple[float, float, str]] | None]] = []
         for seg in segments:
             text = seg.text.strip()
             if text:
-                out.append((offset + seg.start, offset + seg.end, text))
+                words = None
+                if self.settings.word_timestamps and seg.words:
+                    words = [(offset + w.start, offset + w.end, w.word.strip()) for w in seg.words if w.word.strip()]
+                out.append((offset + seg.start, offset + seg.end, text, words))
             if on_progress:
                 on_progress(seg.end)
         return info.language, out

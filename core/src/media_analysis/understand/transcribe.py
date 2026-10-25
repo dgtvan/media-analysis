@@ -9,7 +9,7 @@ from media_analysis.engine.hardware import detect
 from media_analysis.engine.workflow import Stage
 from media_analysis.media import ffmpeg
 from media_analysis.providers.transcriber import SAMPLE_RATE, FasterWhisperTranscriber, split_points
-from media_analysis.understand.models import FileTranscript, Ingest, MediaFile, Transcript, TranscriptSegment
+from media_analysis.understand.models import FileTranscript, Ingest, MediaFile, Transcript, TranscriptSegment, Word
 
 
 class TranscribeStage(Stage):
@@ -18,29 +18,32 @@ class TranscribeStage(Stage):
     def run(self, ingest: Ingest) -> Transcript:
         rep, cache, force = self.rep, self.cache, self.force
         ts = self.settings.transcription
-        settings_key = ts.model_dump(exclude={"device"})
-        keys = {f.id: self.key(f.fingerprint, settings_key) for f in ingest.files}
+        settings_key = ts.cache_key()
+        # Files whose sound isn't used get an empty transcript that isn't cached: the same file may be used elsewhere.
+        audio = [f for f in ingest.files if f.uses_audio]
+        keys = {f.id: self.key(f.fingerprint, settings_key) for f in audio}
         cached = {fid: cache.load(self.name, k, FileTranscript) for fid, k in keys.items()}
+        silent = {f.id: FileTranscript(file_id=f.id, language=None, segments=[]) for f in ingest.files if not f.uses_audio}
         if not force and all(cached.values()):
             rep.skipped()
-            return Transcript(files=[_relabel(cached[f.id], f.id) for f in ingest.files])  # type: ignore[arg-type]
+            return Transcript(files=[silent.get(f.id) or _relabel(cached[f.id], f.id) for f in ingest.files])  # type: ignore[arg-type]
 
         transcriber = FasterWhisperTranscriber(ts, detect())
         rep.started(f"model {ts.model} on {transcriber.device} ({transcriber.compute_type})")
         results: list[FileTranscript] = []
-        total = sum(f.duration for f in ingest.files if f.has_audio) or 1.0
+        total = sum(f.duration for f in audio) or 1.0
         done_before = 0.0
         for f in ingest.files:
+            if f.id in silent:
+                results.append(silent[f.id])
+                continue
             existing = None if force else cached[f.id]
             if existing:
                 results.append(_relabel(existing, f.id))
                 done_before += f.duration
                 continue
-            if not f.has_audio:
-                ft = FileTranscript(file_id=f.id, language=None, segments=[])
-            else:
-                ft = self._transcribe_file(f, keys[f.id], transcriber, done_before, total)
-                done_before += f.duration
+            ft = self._transcribe_file(f, keys[f.id], transcriber, done_before, total)
+            done_before += f.duration
             cache.save(self.name, keys[f.id], ft)
             results.append(ft)
         rep.done(f"{sum(len(r.segments) for r in results)} segments")
@@ -66,7 +69,11 @@ class TranscribeStage(Stage):
 
                 language, segs = transcriber.transcribe(audio[a:b], offset, progress)
                 chunk = FileTranscript(file_id=f.id, language=language, segments=[
-                    TranscriptSegment(start=start, end=end, text=text) for start, end, text in segs
+                    TranscriptSegment(
+                        start=start, end=end, text=text,
+                        words=[Word(start=ws, end=we, text=w) for ws, we, w in words] if words is not None else None,
+                    )
+                    for start, end, text, words in segs
                 ])
                 self.cache.save(self.name, chunk_key, chunk)
             else:

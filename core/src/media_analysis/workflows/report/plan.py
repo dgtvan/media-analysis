@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from media_analysis.engine.workflow import Stage
 from media_analysis.providers.llm import Text
-from media_analysis.understand.models import Ingest, Transcript, VisualScan
+from media_analysis.understand.models import Ingest, VisualScan
+from media_analysis.understand.views import scan_view
 from media_analysis.workflows.report import prompts
 from media_analysis.workflows.report.models import EvidenceRequest, FramePlan
 from media_analysis.workflows.report.templates.registry import Template
@@ -12,8 +13,10 @@ from media_analysis.workflows.report.templates.registry import Template
 
 class PlanStage(Stage):
     name = "plan"
+    # 2: reads the phrase view of the transcript (understand/views.py).
+    version = 2
 
-    def run(self, ingest: Ingest, transcript: Transcript, scan: VisualScan, template: Template) -> FramePlan:
+    def run(self, ingest: Ingest, transcript: str, scan: VisualScan, template: Template) -> FramePlan:
         rep = self.rep
         videos = {f.id: f for f in ingest.files if f.has_video}
         if not videos:
@@ -37,8 +40,8 @@ class PlanStage(Stage):
         content = [
             Text("# Report template\n" + template_text),
             Text("# Files with video\n" + video_list),
-            Text("# Transcript\n" + transcript.to_prompt_text(ingest)),
-            Text("# Visual segments\n" + scan.to_prompt_text()),
+            Text("# Transcript\n" + transcript),
+            Text("# Visual segments\n" + scan_view(scan)),
             Text(f"Return at most {ev.max_requests} requests."),
         ]
         data = self.ctx.llm.generate_json(prompts.PLAN_SYSTEM, content, prompts.plan_schema(ev.max_requests), rep.activity)

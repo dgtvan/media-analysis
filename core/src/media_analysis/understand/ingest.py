@@ -19,12 +19,14 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".
 class IngestStage(Stage):
     name = "ingest"
 
-    def run(self, input_dir: Path) -> Ingest:
+    def run(self, input_dir: Path, paths: list[Path] | None = None) -> Ingest:
+        """The folder's files in name order, or `paths` in the given order (footage imported from anywhere)."""
         rep = self.rep
-        rep.started(str(input_dir))
+        rep.started(str(input_dir) if paths is None else f"{len(paths)} imported file(s)")
         files: list[MediaFile] = []
         skipped: list[str] = []
-        for path in sorted(p for p in input_dir.iterdir() if p.is_file()):
+        candidates = sorted(p for p in input_dir.iterdir() if p.is_file()) if paths is None else [p for p in paths if p.is_file()]
+        for path in candidates:
             ext = path.suffix.lower()
             if ext not in VIDEO_EXTENSIONS and ext not in AUDIO_EXTENSIONS:
                 skipped.append(path.name)
@@ -39,7 +41,7 @@ class IngestStage(Stage):
         for name in skipped:
             rep.warning(f"skipped (not video/audio): {name}")
         if not files:
-            raise MediaAnalysisError(f"No video or audio files found in {input_dir}.")
+            raise MediaAnalysisError(f"No video or audio files found in {input_dir if paths is None else 'the imported files'}.")
         files = label_speakers(files)
         labelled = [f for f in files if f.speaker]
         if labelled:

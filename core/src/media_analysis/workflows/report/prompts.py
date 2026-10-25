@@ -139,7 +139,8 @@ Rules:
   tasks. When something is unclear or missing, say so briefly.
 - The transcript comes from automatic speech recognition and may contain errors or mixed English/Vietnamese. Translate
   to English; when quoting, you may keep the original words in brackets.
-- Cite moments with timecodes like [00:12:31]; when there is more than one file, prefix the file id: [f2 00:12:31].
+- Cite moments with the start time of the transcript line they come from, like [00:12:31] (one time, not a
+  range); when there is more than one file, prefix the file id: [f2 00:12:31].
   Files recorded together (a "Conversation" section) share one timeline: cite those with a plain [00:12:31].
   In a conversation, "Me" is the person who made the recording and "Others" everyone else; use names instead when
   the conversation makes them clear.

@@ -8,6 +8,7 @@ static class RunStatus
         ["ingest"] = "Reading files",
         ["transcribe"] = "Transcribing audio",
         ["scan"] = "Scanning video",
+        ["condense"] = "Condensing the transcript",
         ["classify"] = "Choosing a template",
         ["plan"] = "Picking key moments",
         ["extract"] = "Extracting frames",

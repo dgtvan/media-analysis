@@ -32,6 +32,15 @@ class TranscriptionSettings(BaseModel):
     )
     chunk_minutes: float = 10.0
     beam_size: int = 5
+    word_timestamps: bool = Field(False, description="Also time every word (for cutting between words).")
+    verbatim: bool = Field(False, description="Keep fillers such as 'um' and 'uh' instead of tidying them away.")
+
+    def cache_key(self) -> dict:
+        """What a transcript depends on. Options that are off are left out, so turning on an option a workflow needs
+        doesn't redo transcripts made without it."""
+        key = self.model_dump(exclude={"device", "word_timestamps", "verbatim"})
+        key.update({k: True for k in ("word_timestamps", "verbatim") if getattr(self, k)})
+        return key
 
 
 class ScanSettings(BaseModel):
@@ -58,6 +67,9 @@ class LlmSettings(BaseModel):
         None, description="Claude Code config folder to sign in with (CLAUDE_CONFIG_DIR). None = Claude Code's default.",
     )
     classify_min_confidence: float = 0.5
+    transcript_budget_chars: int = Field(
+        300_000, description="Longer transcript views are condensed in parts before the Claude calls that read them.",
+    )
 
     def profile_dir(self) -> Path:
         """The Claude Code config folder that holds the login used for analyses."""

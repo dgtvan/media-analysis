@@ -6,8 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from media_analysis.engine.timecode import format_timecode
-
 
 class MediaFile(BaseModel):
     id: str
@@ -22,6 +20,12 @@ class MediaFile(BaseModel):
     height: int | None = None
     speaker: str | None = None
     """Who this file's audio is, for files recorded together on one timeline (e.g. "Me", "Others")."""
+    duplicate_audio: bool = False
+    """The sound is also in files recorded together with this one (a Meeting Recorder video), so it isn't used."""
+
+    @property
+    def uses_audio(self) -> bool:
+        return self.has_audio and not self.duplicate_audio
 
 
 class Ingest(BaseModel):
@@ -32,10 +36,18 @@ class Ingest(BaseModel):
         return next(f for f in self.files if f.id == file_id)
 
 
+class Word(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
 class TranscriptSegment(BaseModel):
     start: float
     end: float
     text: str
+    words: list[Word] | None = None
+    """Per-word times, only when word timestamps were asked for."""
 
 
 class FileTranscript(BaseModel):
@@ -46,42 +58,6 @@ class FileTranscript(BaseModel):
 
 class Transcript(BaseModel):
     files: list[FileTranscript]
-
-    def to_prompt_text(self, ingest: Ingest) -> str:
-        """Timecoded transcript per file. Files with a speaker were recorded together, so their speech is merged
-        into one conversation on a shared timeline, each line labelled with its speaker."""
-        lines: list[str] = []
-        together = [ft for ft in self.files if ingest.by_id(ft.file_id).speaker]
-        if together:
-            sources = ", ".join(
-                f"{mf.id} ({mf.name}) = {mf.speaker}" for mf in (ingest.by_id(ft.file_id) for ft in together)
-            )
-            lines.append(f"## Conversation: {sources}")
-            lines.append(
-                "These files were recorded at the same time, together with any silent video below, so all times are on "
-                "one shared timeline. \"Me\" is the person who made the recording (microphone); \"Others\" is everyone "
-                "heard through the computer."
-            )
-            merged = sorted(
-                (seg.start, ingest.by_id(ft.file_id).speaker, seg.text.strip()) for ft in together for seg in ft.segments
-            )
-            if not merged:
-                lines.append("(no speech)")
-            lines += [f"[{format_timecode(start)}] {speaker}: {text}" for start, speaker, text in merged]
-            lines.append("")
-        for ft in self.files:
-            mf = ingest.by_id(ft.file_id)
-            if mf.speaker:
-                continue
-            lines.append(f"## {mf.id}: {mf.name} (duration {format_timecode(mf.duration)})")
-            if not mf.has_audio:
-                lines.append("(no audio)")
-            elif not ft.segments:
-                lines.append("(no speech)")
-            for seg in ft.segments:
-                lines.append(f"[{format_timecode(seg.start)}] {seg.text.strip()}")
-            lines.append("")
-        return "\n".join(lines)
 
 
 class VisualSegment(BaseModel):
@@ -99,12 +75,48 @@ class VisualSegment(BaseModel):
 class VisualScan(BaseModel):
     segments: list[VisualSegment]
 
-    def to_prompt_text(self) -> str:
-        if not self.segments:
-            return "(no video)"
-        lines = ["file | # | start-end | kind | edge density"]
-        for s in self.segments:
-            lines.append(
-                f"{s.file_id} | {s.index} | {format_timecode(s.start)}-{format_timecode(s.end)} | {s.kind} | {s.edge_density:.3f}"
-            )
-        return "\n".join(lines)
+
+class Shot(BaseModel):
+    """One shot of camera footage (media/shots.py)."""
+
+    file_id: str
+    index: int
+    start: float
+    end: float
+    sharpness: float
+    shake: float
+    brightness: float
+    clipped: float
+    rep_time: float
+
+
+class ShotList(BaseModel):
+    shots: list[Shot]
+
+
+class FileSound(BaseModel):
+    file_id: str
+    loudness: float | None
+    """Integrated loudness in LUFS; None when there is no measurable sound."""
+    silences: list[tuple[float, float]]
+
+
+class Sound(BaseModel):
+    files: list[FileSound]
+
+
+class ShotDescription(BaseModel):
+    file_id: str
+    index: int
+    caption: str
+    """What the shot shows, one sentence."""
+    subjects: list[str] = []
+    place: str = ""
+    action: str = ""
+    tags: list[str] = []
+    issues: list[str] = []
+    """Problems visible in the shot (blurry, too dark, obstructed, ...)."""
+
+
+class Descriptions(BaseModel):
+    shots: list[ShotDescription]

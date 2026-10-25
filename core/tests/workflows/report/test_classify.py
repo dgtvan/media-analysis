@@ -1,7 +1,7 @@
 from media_analysis.engine.cache import Cache
 from media_analysis.engine.settings import Settings
 from media_analysis.engine.workflow import RunContext
-from media_analysis.understand.models import FileTranscript, Ingest, MediaFile, Transcript, VisualScan
+from media_analysis.understand.models import Ingest, MediaFile, VisualScan
 from media_analysis.workflows.report.classify import ClassifyStage
 from media_analysis.workflows.report.templates.registry import load_templates
 from media_analysis.workflows.report.workflow import ReportWorkflow
@@ -23,8 +23,7 @@ def classify_with(answer, tmp_path):
     ctx._llm = FakeLLM(answer)
     ingest = Ingest(files=[MediaFile(id="f1", path="talk.mp3", name="talk.mp3", fingerprint="f1", duration=60,
                                      has_video=False, has_audio=True)])
-    transcript = Transcript(files=[FileTranscript(file_id="f1", language="en", segments=[])])
-    return ClassifyStage(ctx).run(ingest, transcript, VisualScan(segments=[]), load_templates([]), None)
+    return ClassifyStage(ctx).run(ingest, "## f1: talk.mp3\n(no speech)", VisualScan(segments=[]), load_templates([]), None)
 
 
 def test_no_fitting_template_falls_back_to_generic(tmp_path):
