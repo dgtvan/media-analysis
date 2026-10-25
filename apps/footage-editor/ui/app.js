@@ -109,6 +109,7 @@ async function loadProject() {
   $("maxMinutes").value = minutes(P.info.max_seconds);
   $("maxMinutes").placeholder = minutes(profiles.find((x) => x.id === P.info.profile_id)?.max_seconds) || "none";
   $("analyseBtn").textContent = P.info.analysing ? "Stop" : P.info.current_version ? "Analyse again" : "Analyse";
+  analysing = P.info.analysing;
   setStatus(P.info.analysing ? "Analysing…" : "", P.info.analysing ? "busy" : "");
   renderSources();
 }
@@ -131,7 +132,6 @@ async function loadEdit(version) {
 
 async function loadActivity() {
   try { P.feed = await api("GET", `/api/projects/${P.id}/activity`); } catch { P.feed = []; }
-  live = null;
   renderFeed();
 }
 
@@ -196,7 +196,7 @@ function onEvent(e) {
     else if (e.event === "finished") setStatus(`Done: version ${e.version}, ${fmtLength(e.seconds)}`);
     else if (e.event === "job_exit" && e.stopped) setStatus("Stopped");
     onJobEvent(e);
-    if (e.event === "job_exit") { loadProject(); loadEdit(); loadActivity(); }
+    if (e.event === "job_exit") { loadProject(); loadEdit(); }
   } else if (e.source === "project") {
     if (e.event === "edit_changed") loadEdit();
     if (e.event === "project_changed") loadProject();
@@ -272,108 +272,78 @@ footagePane.addEventListener("drop", (e) => {
   if (host?.postMessageWithAdditionalObjects) host.postMessageWithAdditionalObjects({ type: "dropped" }, e.dataTransfer.files);
 });
 
-// ---------- activity: the analysis steps and the conversation with Claude, in one feed ------------------------------
+// ---------- activity: every analysis step and every message, one record each, oldest first -------------------------
 
-// What each step does, in words.
+// What each step does while it runs, and what it says when it's finished.
 const STEP_TEXT = {
-  ingest: "Reading the footage", transcribe: "Transcribing speech word by word",
-  shots: "Finding shots and checking sharpness, shake and light", sound: "Measuring pauses and loudness",
-  describe: "Claude is looking at every shot", prepare: "Making preview copies and filmstrips",
-  sequence: "Claude is planning the edit",
+  ingest: ["Reading the footage", "Read the footage"],
+  transcribe: ["Transcribing speech word by word", "Transcribed the speech"],
+  shots: ["Finding shots and checking sharpness, shake and light", "Found the shots"],
+  sound: ["Measuring pauses and loudness", "Measured pauses and loudness"],
+  describe: ["Claude is looking at every shot", "Claude described every shot"],
+  prepare: ["Making preview copies and filmstrips", "Made preview copies and filmstrips"],
+  sequence: ["Claude is planning the edit", "Claude planned the edit"],
 };
+const KEPT = ["analysis_started", "stage_started", "stage_done", "stage_skipped", "warning", "info", "error", "finished",
+  "summary", "job_exit"];
 const fmtLength = (seconds) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
-const clock = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+const clock = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
 
-let pending = null;   // the Claude answer being written
-let live = null;      // the analysis running now: its run (as in the feed) plus live progress per step
+let pending = null;            // the Claude answer being written
+let running = null;            // the step running now: { stage, detail, pct }
+let analysing = false;
 
-// Groups the stored feed into analysis runs (from "analysis_started" to "job_exit") and chat messages.
-function feedItems() {
-  const items = [];
-  let run = null;
-  for (const e of P.feed) {
-    if (e.kind === "analysis") {
-      if (e.event === "analysis_started" || !run) { run = { type: "run", start: e, events: [] }; items.push(run); }
-      if (e.event !== "analysis_started") run.events.push(e);
-      if (e.event === "job_exit") run = null;
-    } else {
-      items.push({ type: "chat", entry: e });
-    }
-  }
-  return items;
-}
-
-function runSteps(run) {
-  const steps = new Map();
-  const notes = [];
-  let end = null, summary = null;
-  for (const e of run.events) {
-    if (e.stage && STEP_TEXT[e.stage] && ["stage_started", "stage_done", "stage_skipped"].includes(e.event)) {
-      const st = steps.get(e.stage) || { stage: e.stage, state: "active", detail: "", started: e.elapsed, ended: null };
-      if (e.event === "stage_started") { st.state = "active"; st.started = e.elapsed; st.detail = e.message && !e.message.includes(":\\") ? e.message : ""; }
-      if (e.event === "stage_done") { st.state = "done"; st.ended = e.elapsed; st.detail = e.message; }
-      if (e.event === "stage_skipped") { st.state = "skipped"; st.detail = ["cached", "ready"].includes(e.message) ? "already done" : e.message; }
-      steps.set(e.stage, st);
-    } else if (e.event === "info" && steps.get(e.stage)?.state === "active") {
-      steps.get(e.stage).detail = e.message;
-    } else if (e.event === "warning" || e.event === "info") {
-      notes.push(e);
-    } else if (e.event === "finished" || e.event === "error") {
-      end = e;
-    } else if (e.event === "summary") {
-      summary = e.message;
-    } else if (e.event === "job_exit" && !end) {
-      end = e;
-    }
-  }
-  return { steps, notes, end, summary };
-}
-
-function runCard(run, isLive) {
-  const { steps, notes, end, summary } = runSteps(run);
-  const s = run.start;
-  const profile = profiles.find((x) => x.id === s.profile)?.name || s.profile || "";
-  // A run that never ended and isn't running now was cut off (the app closed during it).
-  const state = isLive ? "running" : end?.event === "finished" ? "done" : end?.stopped ? "stopped" : end ? "failed" : "interrupted";
+function record(icon, cls, title, detail, time) {
   const el = document.createElement("div");
-  el.className = `run ${state}`;
-  el.innerHTML = `<div class="run-head"><b>Analysis</b><span class="run-state">${state}</span></div>
-    <div class="run-meta">${clock(s.time)} · ${esc(profile)}${s.max_seconds ? `, max ${minutes(s.max_seconds)} min` : ""} · ${s.files ?? "?"} file(s)</div>`;
-  for (const [stage, st] of steps) {
-    const lv = isLive && live.progress[stage];
-    const active = st.state === "active";
-    let detail = st.detail;
-    if (active && lv?.message) detail = lv.message;
-    const pct = active && lv?.pct != null ? lv.pct : null;
-    const took = st.ended != null && st.started != null ? fmtLength(st.ended - st.started) : "";
-    const icon = { done: "✓", skipped: "–", active: active && isLive ? "" : "✗" }[st.state];
-    const row = document.createElement("div");
-    row.className = `step ${st.state}${active && isLive ? " live" : ""}`;
-    row.innerHTML = `<span class="icon">${icon}</span><div class="step-body"><div><span class="what">${esc(STEP_TEXT[stage])}</span>
-      <span class="took">${took}</span></div>${detail ? `<div class="detail">${esc(detail)}${pct != null ? ` · ${pct}%` : ""}</div>` : ""}
-      ${pct != null ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}</div>`;
-    el.appendChild(row);
-  }
-  for (const n of notes) {
-    const row = document.createElement("div");
-    row.className = `note ${n.event}`;
-    row.textContent = (n.event === "warning" ? "⚠ " : "") + n.message;
-    el.appendChild(row);
-  }
-  if (end) {
-    const row = document.createElement("div");
-    row.className = "run-end";
-    row.textContent = end.event === "finished"
-      ? `Suggested edit: version ${end.version}, ${fmtLength(end.seconds)} long.`
-      : end.event === "error" ? `Failed: ${end.message}` : end.stopped ? "Stopped. Analysing again continues where it stopped." : `Ended (exit code ${end.exit_code}).`;
-    el.appendChild(row);
-  }
-  if (summary) {
-    const d = document.createElement("details");
-    d.innerHTML = `<summary>Details</summary><pre>${esc(summary)}</pre>`;
-    el.appendChild(d);
-  }
+  el.className = `rec ${cls}`;
+  el.innerHTML = `<span class="rec-icon">${icon}</span><div class="rec-body"><div class="rec-title">${title}</div>
+    ${detail ? `<div class="rec-detail">${detail}</div>` : ""}</div><span class="rec-time">${clock(time)}</span>`;
   return el;
+}
+
+// One analysis event as a record, or null for events that only feed other records (the summary, Claude's calls).
+function analysisRecord(e, startedAt, isRunningStep) {
+  const step = STEP_TEXT[e.stage];
+  switch (e.event) {
+    case "analysis_started": {
+      const profile = profiles.find((x) => x.id === e.profile)?.name || e.profile || "";
+      return record("▶", "analysis head", "Analysis started",
+        esc(`${profile}${e.max_seconds ? `, max ${minutes(e.max_seconds)} min` : ""} · ${e.files ?? "?"} file(s)`), e.time);
+    }
+    case "stage_started": {
+      if (!step) return null;
+      const live = isRunningStep ? running : null;
+      const detail = live?.detail || (e.message && !/^[A-Za-z]:\\/.test(e.message) ? e.message : "");
+      const el = record(isRunningStep ? "" : "•", `analysis step${isRunningStep ? " live" : ""}`, esc(step[0]) + (isRunningStep ? "…" : ""),
+        esc(detail) + (live?.pct != null ? ` · ${live.pct}%` : ""), e.time);
+      if (live?.pct != null) el.querySelector(".rec-body").insertAdjacentHTML("beforeend", `<div class="bar"><i style="width:${live.pct}%"></i></div>`);
+      return el;
+    }
+    case "stage_done":
+      if (!step) return null;
+      return record("✓", "analysis done", esc(step[1]),
+        esc(e.message || "") + (startedAt[e.stage] != null && e.elapsed != null ? ` · took ${fmtLength(e.elapsed - startedAt[e.stage])}` : ""), e.time);
+    case "stage_skipped":
+      if (!step) return null;
+      return record("–", "analysis skipped", esc(step[0]),
+        ["cached", "ready"].includes(e.message) ? "already done earlier, reused" : esc(e.message || ""), e.time);
+    case "info":
+      return step ? record("·", "analysis info", esc(e.message), "", e.time) : null;
+    case "warning":
+      return record("⚠", "analysis warning", esc(e.message), "", e.time);
+    case "error":
+      return record("✗", "analysis failed", "Analysis failed", esc(e.message), e.time);
+    case "finished": {
+      const el = record("★", "analysis result", `Suggested edit ready: version ${e.version}`, `${fmtLength(e.seconds)} long`, e.time);
+      el.dataset.version = e.version;
+      return el;
+    }
+    case "job_exit":
+      if (e.stopped) return record("■", "analysis stopped", "Analysis stopped", "Analysing again continues where it stopped.", e.time);
+      return e.exit_code ? record("✗", "analysis failed", "Analysis ended with an error", `exit code ${e.exit_code}`, e.time) : null;
+    default:
+      return null;
+  }
 }
 
 function chatBubble(m) {
@@ -397,39 +367,48 @@ function renderFeed() {
   const box = $("messages");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.innerHTML = "";
-  const items = feedItems();
-  if (live && !items.some((i) => i.type === "run" && i.start.time === live.run.start.time)) items.push(live.run);
-  for (const it of items) {
-    if (it.type === "chat") box.appendChild(chatBubble(it.entry));
-    else box.appendChild(runCard(it, !!live && it.start.time === live.run.start.time));
-  }
+  const startedAt = {};
+  // The last "started" of the running step shows live progress; earlier ones are history.
+  const lastStart = analysing && running ? P.feed.findLastIndex((e) => e.kind === "analysis" && e.event === "stage_started" && e.stage === running.stage) : -1;
+  P.feed.forEach((e, i) => {
+    if (e.kind !== "analysis") { box.appendChild(chatBubble(e)); return; }
+    if (e.event === "analysis_started") for (const k of Object.keys(startedAt)) delete startedAt[k];
+    if (e.event === "stage_started") startedAt[e.stage] = e.elapsed;
+    const el = analysisRecord(e, startedAt, i === lastStart);
+    if (!el) return;
+    if (e.event === "finished") {
+      const summary = P.feed.slice(0, i).reverse().find((x) => x.event === "summary");
+      if (summary) el.querySelector(".rec-body").insertAdjacentHTML("beforeend", `<details><summary>Details</summary><pre>${esc(summary.message)}</pre></details>`);
+      el.querySelector(".rec-title").addEventListener("click", async () => {
+        await api("POST", `/api/projects/${P.id}/versions/${e.version}/current`); loadEdit();
+      });
+    }
+    box.appendChild(el);
+  });
   if (pending) box.appendChild(pending.el);
-  if (!items.length && !pending) box.innerHTML = `<div class="dim feed-empty">Analysis steps and your conversation with Claude appear here.</div>`;
-  if (atBottom || live || pending) box.scrollTop = box.scrollHeight;
+  if (!P.feed.length && !pending) box.innerHTML = `<div class="dim feed-empty">Analysis steps and your conversation with Claude appear here.</div>`;
+  if (atBottom || analysing || pending) box.scrollTop = box.scrollHeight;
 }
 
-// Live analysis: the stored run (from the feed) plus progress that isn't stored.
+// Live analysis: kept events become records right away (the server stores the same ones); progress and Claude's
+// status only update the record of the running step.
 function onJobEvent(e) {
-  if (!live) {
-    const items = feedItems();
-    const last = [...items].reverse().find((i) => i.type === "run");
-    live = { run: last && !runSteps(last).end ? last : { type: "run", start: { time: new Date().toISOString() }, events: [] }, progress: {} };
+  analysing = e.event !== "job_exit";
+  if (KEPT.includes(e.event) && !String(e.message || "").startsWith("Claude call")) {
+    P.feed.push({ kind: "analysis", ...e, time: e.time || new Date().toISOString() });
   }
-  const kept = ["stage_started", "stage_done", "stage_skipped", "warning", "info", "error", "finished", "summary", "job_exit"];
-  if (kept.includes(e.event) && !String(e.message || "").startsWith("Claude call")) live.run.events.push(e);
-  if (e.stage) {
-    const pr = live.progress[e.stage] || (live.progress[e.stage] = {});
-    if (e.event === "progress" && e.total) {
-      pr.pct = Math.round(100 * e.completed / e.total);
-      if (e.message) pr.message = e.message;
-    } else if (e.event === "activity") {
-      pr.message = e.message.startsWith("model ") ? `Claude (${e.message.slice(6)}) is starting` : `Claude is ${e.message}`;
-    } else if (e.event === "stage_started") {
-      pr.pct = null; pr.message = "";
-    }
+  if (e.event === "stage_started") running = { stage: e.stage, detail: "", pct: null };
+  else if (["progress", "activity"].includes(e.event) && STEP_TEXT[e.stage] && running?.stage !== e.stage) {
+    running = { stage: e.stage, detail: "", pct: null };  // opened while this step was already running
   }
-  if (!$("paneChat").classList.contains("active")) return;
-  renderFeed();
+  if (running && e.stage === running.stage && e.event !== "stage_started") {
+    if (e.event === "progress" && e.total) { running.pct = Math.round(100 * e.completed / e.total); if (e.message) running.detail = e.message; }
+    else if (e.event === "activity") running.detail = e.message.startsWith("model ") ? `Claude (${e.message.slice(6)}) is starting` : `Claude is ${e.message}`;
+    else if (e.event === "info") running.detail = e.message;
+    else if (["stage_done", "stage_skipped"].includes(e.event)) running = null;
+  }
+  if (e.event === "job_exit") running = null;
+  if ($("paneChat").classList.contains("active")) renderFeed();
 }
 
 async function send() {
