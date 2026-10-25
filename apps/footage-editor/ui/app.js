@@ -525,6 +525,14 @@ function filmstrip(el, s, from) {
   el.style.backgroundRepeat = "no-repeat";
 }
 
+// Items on the video tracks above V1: their picture covers V1 while V1's sound keeps playing.
+const overlays = () => (P.edit?.tracks || []).filter((tr) => tr.kind === "video" && tr.id !== "V1").flatMap((tr) => tr.items.map((it) => ({ tr, it })));
+
+function coverNote(it) {
+  const over = overlays().filter(({ it: o }) => o.at < it.at + it.duration && o.at + o.duration > it.at);
+  return over.map(({ tr, it: o }) => `\nPicture covered by ${o.label} (${tr.name}) at ${fmtSrc(o.at)}–${fmtSrc(o.at + o.duration)}; this clip's sound keeps playing.`).join("");
+}
+
 function clipEl(tr, it, extra, labelOnly = false, frames = true) {
   const c = document.createElement("div");
   c.className = extra + (tr.kind === "music" || tr.kind === "sfx" ? " placeholder" : "") + (selected === it.id ? " selected" : "") + (it.changed && !tr.linked ? " changed" : "");
@@ -534,7 +542,7 @@ function clipEl(tr, it, extra, labelOnly = false, frames = true) {
   else if (tr.linked) c.innerHTML = `<div class="wave"></div><span class="lbl">${it.label}</span>`;
   else if (labelOnly) c.innerHTML = `<span class="lbl">${it.label}</span>`;
   else c.innerHTML = `<span class="lbl">${it.label}</span><span class="txt">${esc(it.source ? src(it.source)?.name : it.text)}</span>`;
-  c.title = it.source ? `${it.label} ${src(it.source)?.name} ${fmtSrc(it.in)}–${fmtSrc(it.out)}${it.transcript ? `\n"${it.transcript}"` : ""}${it.reason ? `\n${it.reason}` : ""}` : `${it.label} ${it.text}`;
+  c.title = it.source ? `${it.label} ${src(it.source)?.name} ${fmtSrc(it.in)}–${fmtSrc(it.out)}${it.transcript ? `\n"${it.transcript}"` : ""}${it.reason ? `\n${it.reason}` : ""}${tr.id === "V1" ? coverNote(it) : ""}` : `${it.label} ${it.text}`;
   c.addEventListener("click", (e) => {
     selected = it.id; renderTimeline(); renderSources();
     if (activePane === "paneChat") addToMessage(it.label);
@@ -594,6 +602,13 @@ function renderTimeline() {
           c.style.left = x1 * pxPerSec + "px"; c.style.width = Math.max(4, (x2 - x1) * pxPerSec - 1) + "px";
           lane.appendChild(c);
         });
+      }
+    }
+    if (tr.id === "V1") for (const ov of overlays()) {
+      for (const [x1, x2] of pieces(ov.it.at, ov.it.duration)) {
+        const c = document.createElement("div"); c.className = "covered";
+        c.style.left = x1 * pxPerSec + "px"; c.style.width = (x2 - x1) * pxPerSec + "px";
+        lane.appendChild(c);
       }
     }
     lanes.appendChild(lane);
