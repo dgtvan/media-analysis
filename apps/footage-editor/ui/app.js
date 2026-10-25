@@ -715,8 +715,45 @@ $("src").addEventListener("ended", () => { $("play").textContent = "▶ Play"; }
 $("zoom").addEventListener("input", (e) => { pxPerSec = Number(e.target.value); renderTimeline(); });
 $("view").addEventListener("change", (e) => { view = e.target.value; renderTimeline(); });
 $("lanesWrap").addEventListener("scroll", (e) => { $("rulerWrap").scrollLeft = e.target.scrollLeft; $("headers").scrollTop = e.target.scrollTop; });
-$("rulerWrap").addEventListener("click", (e) => { const r = $("ruler").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
-$("lanes").addEventListener("click", (e) => { const r = $("lanes").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
+$("rulerWrap").addEventListener("click", (e) => { if (scrubbed) return; const r = $("ruler").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
+$("lanes").addEventListener("click", (e) => { if (scrubbed) return; const r = $("lanes").getBoundingClientRect(); goTo((e.clientX - r.left) / pxPerSec); });
+
+// Edit time at a timeline position; over a cut part (full footage view) the nearest kept moment.
+function editTimeAt(pos) {
+  if (!layout) return Math.max(0, Math.min(total, pos));
+  const r = hit(pos);
+  if (r.t != null) return r.t;
+  let best = total, gap = Infinity;
+  for (const b of layout.blocks) for (const it of b.items) {
+    const x1 = b.x0 + it.in, x2 = b.x0 + it.out;
+    if (Math.abs(pos - x1) < gap) { gap = Math.abs(pos - x1); best = it.at; }
+    if (Math.abs(pos - x2) < gap) { gap = Math.abs(pos - x2); best = it.at + it.duration; }
+  }
+  return best;
+}
+
+// Drag the playhead to scrub; playback resumes on release if it was playing. The timeline scrolls near its edges.
+let scrubbed = false;
+for (const host of ["ruler", "lanes"]) $(host).addEventListener("pointerdown", (e) => {
+  if (!e.target.classList.contains("playhead") || e.button !== 0 || !P.edit) return;
+  e.preventDefault(); e.stopPropagation();
+  const resume = playing && !sourceMode;
+  if (playing) setPlaying(false);
+  document.body.classList.add("scrubbing");
+  const wrap = $("lanesWrap");
+  const move = (ev) => {
+    const w = wrap.getBoundingClientRect();
+    if (ev.clientX > w.right - 30) wrap.scrollLeft += 20; else if (ev.clientX < w.left + 30) wrap.scrollLeft -= 20;
+    seek(editTimeAt((ev.clientX - $("lanes").getBoundingClientRect().left) / pxPerSec));
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    document.body.classList.remove("scrubbing");
+    scrubbed = true; setTimeout(() => { scrubbed = false; });
+    if (resume) setPlaying(true);
+  };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+});
 document.addEventListener("keydown", (e) => {
   if (e.code === "Space" && !["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName) && !$("project").hidden) { e.preventDefault(); $("play").click(); }
 });

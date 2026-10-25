@@ -120,7 +120,11 @@ label.inline { color: var(--dim); display: flex; align-items: center; gap: 6px; 
 .rblock { position: absolute; top: 0; bottom: 0; border-left: 1px solid #5a6170; padding: 2px 0 0 5px; font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; }
 .rmark { position: absolute; bottom: 0; height: 8px; border-left: 1px solid var(--dim); }
 .wave { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, rgba(255,255,255,.18) 0 2px, transparent 2px 4px); mask: linear-gradient(transparent 30%, #000 30%, #000 70%, transparent 70%); }
-.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--playhead); pointer-events: none; z-index: 5; }
+.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--playhead); z-index: 5; cursor: ew-resize; }
+/* A wider invisible grip, so the 2 px line is easy to catch. */
+.playhead::after { content: ""; position: absolute; top: 0; bottom: 0; left: -6px; width: 14px; }
+.playhead:hover, .scrubbing .playhead { width: 3px; background: #ff7a7a; box-shadow: 0 0 0 3px rgba(255, 77, 77, .25); }
+.scrubbing, .scrubbing * { cursor: ew-resize !important; user-select: none; }
 .ruler .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--playhead); }
 
 /* app additions */
