@@ -6,6 +6,22 @@ and [DEPLOYMENT.md](DEPLOYMENT.md); this file keeps the reasons that the code do
 
 ---
 
+## 2026-10-26 · Footage Editor removed; the repo focuses on Recording Reports
+
+**Change.** Removed the Footage Editor app (`apps/footage-editor`) and everything in the core only it used: the
+`edit` workflow, the local service and `serve`/`edit`/`edit-project`/`chat` commands, versioned documents, the agent
+with tools, the footage stages (`shots`, `sound`, `describe`), proxies, filmstrips, loudness, the "look" image, and the
+per-app deploy options (`StartAtSignIn`, `AddToPath`, `CopyDirs`). FastAPI and websockets are no longer dependencies.
+The installed copy was uninstalled; its data folder (`%LOCALAPPDATA%\VanDang\FootageEditor\data`) was kept.
+
+**Why.** The suggested edits weren't good enough to be worth refining: the weak part was understanding the footage
+(what a shot shows and which moments matter), not the editing tools around it. Rather than keep code that needs
+upkeep with every core change, effort goes into Recording Reports.
+
+**Consequences.** The code is in the history (last at commit 1b59ebd) if footage editing is tried again; it would
+need a better way to understand footage first. The transcriber's word timestamps and verbatim options, added for
+cutting between words, stay as transcription options (off by default).
+
 ## 2026-10-26 · Optional transcript correction by Claude
 
 **Change.** A `correct` stage after transcription: Claude returns only the transcript lines it changes to fix

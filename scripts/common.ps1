@@ -31,10 +31,6 @@ $FfmpegVersion = '9.0.2'   # a Gyan.FFmpeg winget version
 
 # Installs of this app under earlier names (app.psd1 Previous): install.ps1 removes them; the app copies their data.
 $Previous  = @($AppDef.Previous | Where-Object { $_ })
-# A tray app starts at sign-in; a windowed app doesn't. Only one app puts the media-analysis command on PATH.
-$StartAtSignIn = $AppDef.StartAtSignIn -ne $false
-$AddToPath = $AppDef.AddToPath -ne $false
-$CopyDirs  = @($AppDef.CopyDirs | Where-Object { $_ })
 
 function Write-Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
@@ -105,7 +101,7 @@ function Stop-App([switch]$Force, [string]$Id = $AppId, [string]$Name = $AppName
         if ($answer -eq 'refused') {
             Write-Host "$Name is busy (an analysis is running or queued). Let it finish or stop it, then run this again, or use -Force (the analysis stops; analysing the project again continues where it stopped)." -ForegroundColor Yellow
         } else {
-            Write-Host "$Name did not answer the close request within 10 s. Close it (or Exit from its tray menu), then run this again, or use -Force." -ForegroundColor Yellow
+            Write-Host "$Name did not answer the close request within 10 s. Exit it from the tray menu, then run this again, or use -Force." -ForegroundColor Yellow
         }
         exit 3
     }

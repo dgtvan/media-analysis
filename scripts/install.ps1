@@ -115,12 +115,8 @@ try {
     if ($LASTEXITCODE -ge 8) { throw "Copying the build failed (robocopy exit code $LASTEXITCODE)." }
 
     # 5. Register
-    Write-Step ('Registering the Start Menu shortcut' + $(if ($StartAtSignIn) { ', start at sign-in' }) + $(if ($AddToPath) { ' and the media-analysis command' }))
-    if ($StartAtSignIn) {
-        Set-ItemProperty $RunKey -Name $AppId -Value "`"$ExePath`" --data-dir `"$DataDir`""
-    } else {
-        Remove-ItemProperty $RunKey -Name $AppId -ErrorAction SilentlyContinue
-    }
+    Write-Step 'Registering start at sign-in, the Start Menu shortcut and the media-analysis command'
+    Set-ItemProperty $RunKey -Name $AppId -Value "`"$ExePath`" --data-dir `"$DataDir`""
 
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($Shortcut)
@@ -144,7 +140,7 @@ try {
             }
         }
     }
-    Set-UserPath -Add $(if ($AddToPath) { @($AppDir) } else { @() }) -Remove ($oldAppDirs + $(if ($AddToPath) { @() } else { @($AppDir) }))
+    Set-UserPath -Add $AppDir -Remove $oldAppDirs
 
     # Core environments of earlier builds (hardlinks, so this frees little but keeps the folder tidy).
     Get-ChildItem $EnvsDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $runtime.EnvDir } |
@@ -158,13 +154,12 @@ try {
 
     # 7. Start
     if ($NoStart) {
-        Write-Host "Installed to $AppDir (not started). Start it from the Start Menu." -ForegroundColor Green
+        Write-Host "Installed to $AppDir (not started). It starts at sign-in or from the Start Menu." -ForegroundColor Green
         exit 0
     }
     Write-Step "Starting $AppName"
     Start-Process $ExePath -ArgumentList '--data-dir', "`"$DataDir`"" -WorkingDirectory $AppDir
-    $where = if ($StartAtSignIn) { 'is in the system tray and starts at sign-in' } else { 'is running; start it from the Start Menu' }
-    Write-Host "Installed to $AppDir. $AppName $where." -ForegroundColor Green
+    Write-Host "Installed to $AppDir. $AppName is in the system tray and starts at sign-in." -ForegroundColor Green
     exit 0
 } catch {
     Write-Host "Install failed: $_" -ForegroundColor Red

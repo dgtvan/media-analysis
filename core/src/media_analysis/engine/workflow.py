@@ -121,7 +121,7 @@ class Stage:
     def need_work(self) -> None:
         """Called before a stage does real work; refuses when the run may only read the cache."""
         if self.ctx.cache_only:
-            raise MediaAnalysisError(f"'{self.name}' isn't in the cache; analyse the footage again.")
+            raise MediaAnalysisError(f"'{self.name}' isn't in the cache; analyse the files again.")
 
 
 O = TypeVar("O", bound=RunOptions)

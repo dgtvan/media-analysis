@@ -1,7 +1,7 @@
 """Profiles: Markdown files with YAML front matter that tell a workflow how to work on one kind of input.
 
 The front matter holds structured settings a workflow uses directly; the Markdown body is guidance for Claude. Each
-workflow defines its own profile model (report templates, edit profiles). Built-in profiles ship with the package;
+workflow defines its own profile model (report templates). Built-in profiles ship with the package;
 user profiles in the user's folders replace built-in ones with the same id.
 """
 

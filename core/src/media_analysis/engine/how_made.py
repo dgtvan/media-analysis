@@ -16,8 +16,7 @@ FILE_NAME = "how-made.md"
 STEP_NAMES = {
     "ingest": "Read the files", "transcribe": "Transcribe speech", "correct": "Correct misheard words", "scan": "Scan the video", "condense": "Condense the transcript",
     "classify": "Choose the template", "plan": "Plan key moments", "extract": "Extract frames", "read": "Read the frames",
-    "report": "Write the report", "assemble": "Write the output folder", "shots": "Find shots", "sound": "Measure sound",
-    "describe": "Describe shots", "prepare": "Make previews", "sequence": "Plan the edit",
+    "report": "Write the report", "assemble": "Write the output folder",
 }
 
 

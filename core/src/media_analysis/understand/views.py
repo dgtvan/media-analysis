@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from media_analysis.engine.timecode import format_timecode
 from media_analysis.understand.languages import language_shares, transcript_note
-from media_analysis.understand.models import Descriptions, Ingest, ShotList, Transcript, VisualScan, Word
+from media_analysis.understand.models import Ingest, Transcript, VisualScan
 
 
 # Phrases Whisper is known to invent over silence or music (from video outros in its training data). A line that is
@@ -126,62 +126,3 @@ def scan_view(scan: VisualScan) -> str:
         )
     return "\n".join(lines)
 
-
-def shot_view(ingest: Ingest, shots: ShotList, descriptions: Descriptions | None = None) -> str:
-    """One line per shot: id, times, what it shows and its quality, grouped by clip."""
-    described = {(d.file_id, d.index): d for d in (descriptions.shots if descriptions else [])}
-    lines: list[str] = []
-    current = None
-    for s in shots.shots:
-        if s.file_id != current:
-            current = s.file_id
-            mf = ingest.by_id(s.file_id)
-            lines.append(f"## {mf.id}: {mf.name} (duration {format_timecode(mf.duration)})")
-        d = described.get((s.file_id, s.index))
-        what = d.caption if d else "(not described)"
-        extra = []
-        if d and d.tags:
-            extra.append("tags: " + ", ".join(d.tags))
-        if d and d.issues:
-            extra.append("issues: " + ", ".join(d.issues))
-        quality = f"sharp {s.sharpness:.0f}, shake {s.shake:.1f}, light {s.brightness:.2f}"
-        lines.append(
-            f"{s.file_id}#{s.index} [{format_timecode(s.start)}-{format_timecode(s.end)}] {what}"
-            + (f" ({'; '.join(extra)})" if extra else "") + f" [{quality}]"
-        )
-    return "\n".join(lines) if lines else "(no video)"
-
-
-@dataclass
-class Phrase:
-    """A phrase of one file with an id Claude can refer to (f1.p12) and the words it is made of."""
-
-    id: str
-    file_id: str
-    start: float
-    end: float
-    text: str
-    words: list[Word]
-
-
-def file_phrases(ingest: Ingest, transcript: Transcript, rules: PhraseRules = PhraseRules()) -> dict[str, list[Phrase]]:
-    """Phrases per file whose sound is used, numbered within the file."""
-    out: dict[str, list[Phrase]] = {}
-    for ft in transcript.files:
-        if not ingest.by_id(ft.file_id).uses_audio:
-            continue
-        phrases: list[Phrase] = []
-        for seg in sorted(ft.segments, key=lambda s: s.start):
-            text = seg.text.strip()
-            if not text or is_noise(text):
-                continue
-            words = seg.words or [Word(start=seg.start, end=seg.end, text=text)]
-            last = phrases[-1] if phrases else None
-            if last and seg.start - last.end <= rules.merge_gap and seg.end - last.start <= rules.max_phrase:
-                last.end = max(last.end, seg.end)
-                last.text = f"{last.text} {text}"
-                last.words += words
-            else:
-                phrases.append(Phrase(f"{ft.file_id}.p{len(phrases) + 1}", ft.file_id, seg.start, seg.end, text, list(words)))
-        out[ft.file_id] = phrases
-    return out
