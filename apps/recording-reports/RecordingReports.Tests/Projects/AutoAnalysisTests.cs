@@ -19,6 +19,16 @@ public sealed class AutoAnalysisTests
     }
 
     [Fact]
+    public void A_settling_new_project_is_not_waiting_for_the_user()
+    {
+        var project = NewProject(Since.AddMinutes(10), Since.AddMinutes(11));
+        Assert.False(AutoAnalysis.IsWaiting(project, On, null, Since.AddMinutes(12)));
+        Assert.True(AutoAnalysis.IsWaiting(project, On, null, Since.AddMinutes(13)));
+        // Without automatic analysis nothing starts by itself, so a new project is waiting at once.
+        Assert.True(AutoAnalysis.IsWaiting(project, new AppSettings(), null, Since.AddMinutes(12)));
+    }
+
+    [Fact]
     public void Projects_from_before_the_option_was_turned_on_are_left_alone()
     {
         var old = NewProject(Since.AddMinutes(-1), Since.AddMinutes(-1));

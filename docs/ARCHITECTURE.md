@@ -383,8 +383,9 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
 - **Logs and history.** Each analysis gets a log in `<data folder>\logs`: a header (project, options, Claude profile),
   then every event line from the core, so the performance summary ends it. The window shows a readable view of it,
   live while it runs. The outcome, time and log path of the last run per project are kept in `history.json`.
-- **States and icon.** Blue while an analysis runs or is queued, amber when a project is waiting, grey when all are
-  analysed. Failures switch the icon to a warning until they are dismissed in the window.
+- **States and icon.** Blue while an analysis runs or is queued, amber when a project is waiting, grey otherwise. A new
+  project that automatic analysis will start once its files stop changing isn't waiting: it doesn't turn the icon
+  amber, count as not analysed or join *Analyse all not analysed*. Failures switch the icon to a warning until they are dismissed in the window.
 - **Automatic analysis** (off by default) queues projects created after it was turned on, once their files have
   stopped changing for two minutes, and never retries a failed or stopped run.
 - **Busy and closing.** The app is busy while an analysis runs or is queued. An install asks it to close through a

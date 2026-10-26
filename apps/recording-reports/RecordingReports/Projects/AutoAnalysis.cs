@@ -22,6 +22,14 @@ static class AutoAnalysis
     public static bool IsSettling(Project project, AppSettings settings, RunResult? lastResult, DateTime nowUtc) =>
         IsCandidate(project, settings, lastResult) && nowUtc - project.NewestMediaUtc < SettleTime;
 
+    /// <summary>
+    /// Not analysed and waiting for the user: not ignored, and not a new project that starts by itself once its files
+    /// stop changing (that one isn't waiting for anybody yet).
+    /// </summary>
+    public static bool IsWaiting(Project project, AppSettings settings, RunResult? lastResult, DateTime nowUtc) =>
+        project.State == ProjectState.NotAnalysed && !settings.IsIgnored(project.Path)
+        && !IsSettling(project, settings, lastResult, nowUtc);
+
     public static bool ShouldStart(Project project, AppSettings settings, RunResult? lastResult, DateTime nowUtc) =>
         IsCandidate(project, settings, lastResult) && nowUtc - project.NewestMediaUtc >= SettleTime;
 }

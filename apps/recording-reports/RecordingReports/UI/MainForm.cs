@@ -348,7 +348,8 @@ sealed class MainForm : Form
             cells[2].Style.ForeColor = cells[2].Style.SelectionForeColor = r.StatusColor;
         }
 
-        int waiting = _host.Projects.Count(p => p.State == ProjectState.NotAnalysed && !_host.Settings.IsIgnored(p.Path)
+        var now = DateTime.UtcNow;
+        int waiting = _host.Projects.Count(p => AutoAnalysis.IsWaiting(p, _host.Settings, runner.LastResult(p.Path), now)
             && !runner.IsRunning(p.Path) && !runner.IsQueued(p.Path));
         _analyseAll.Enabled = waiting > 0 && _host.Settings.OutputRoot != null;
         _summary.Text = _host.Settings.ProjectsRoot == null || _host.Settings.OutputRoot == null
@@ -603,7 +604,9 @@ sealed class MainForm : Form
 
     private void AnalyseAllWaiting()
     {
-        foreach (var p in _host.Projects.Where(p => p.State == ProjectState.NotAnalysed && !_host.Settings.IsIgnored(p.Path))
+        // New projects still being copied in start by themselves once their files stop changing.
+        var now = DateTime.UtcNow;
+        foreach (var p in _host.Projects.Where(p => AutoAnalysis.IsWaiting(p, _host.Settings, _host.Runner.LastResult(p.Path), now))
                      .OrderBy(p => p.LastModifiedUtc))
             _host.Runner.Enqueue(p);
         RefreshGrid();

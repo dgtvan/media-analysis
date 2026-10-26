@@ -61,7 +61,7 @@ Recording Reports (`apps/recording-reports/`) runs in the background with an ico
 subfolder is a project (one recording session). Each project's report goes to `<output folder>\<project name>`.
 
 - **Tray icon** (sound-wave bars): blue = working (an analysis runs or is queued), amber = waiting (a project has
-  video/audio but no up-to-date report), grey = idle. A project counts as analysed when its `report.md` is newer than
+  video/audio but no up-to-date report; not a new project automatic analysis is about to start), grey = idle. A project counts as analysed when its `report.md` is newer than
   all of its media files, so adding a file makes it waiting again. Its menu has *Status* (the window) and *Exit*;
   double-clicking it also opens the window.
 - **Projects tab**: every project with its name (yours to change: F2, typing, or right-click → *Rename*; the folder

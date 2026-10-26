@@ -8,7 +8,8 @@ namespace RecordingReports.UI;
 /// </summary>
 /// <remarks>
 /// Working: an analysis runs or is queued. Waiting: nothing runs, but at least one project has media files and no
-/// up-to-date report. Idle: everything is analysed. Anything the user must act on (a failed analysis, a broken
+/// up-to-date report, and isn't a new project that will start by itself once its files stop changing. Idle: everything
+/// else. Anything the user must act on (a failed analysis, a broken
 /// install) switches the icon to a warning that stays until the user dismisses it in the window.
 /// An install asks the app to close (App deployment standard v2.3, section 4.4); it refuses while busy, that is while
 /// an analysis runs or is queued.
@@ -200,8 +201,10 @@ sealed class TrayApp : ApplicationContext, IAppHost
 
     private void Refresh()
     {
-        int waiting = _projects.Count(p =>
-            p.State == ProjectState.NotAnalysed && !_settings.IsIgnored(p.Path) && !_runner.IsRunning(p.Path) && !_runner.IsQueued(p.Path));
+        var now = DateTime.UtcNow;
+        int waiting = _projects.Count(p => AutoAnalysis.IsWaiting(p, _settings, _runner.LastResult(p.Path), now)
+            && !_runner.IsRunning(p.Path) && !_runner.IsQueued(p.Path));
+        int settling = _projects.Count(p => AutoAnalysis.IsSettling(p, _settings, _runner.LastResult(p.Path), now));
         State state = _runner.IsBusy ? State.Working : waiting > 0 ? State.Waiting : State.Idle;
         bool hasProblem = _problems.Count > 0;
 
@@ -216,6 +219,9 @@ sealed class TrayApp : ApplicationContext, IAppHost
             status = "Choose a projects folder and an output folder";
         else if (waiting > 0)
             status = waiting == 1 ? "1 project not analysed" : $"{waiting} projects not analysed";
+        else if (settling > 0)
+            status = settling == 1 ? "New project: starts once its files stop changing"
+                : $"{settling} new projects: they start once their files stop changing";
         else
             status = _projects.Count == 0 ? "No projects yet" : "All projects analysed";
 
