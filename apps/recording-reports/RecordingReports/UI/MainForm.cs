@@ -29,6 +29,7 @@ sealed class MainForm : Form
     private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly ComboBox _effort = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly NumericUpDown _maxFrames = new() { Minimum = 0, Maximum = 100, Width = 80 };
+    private readonly ComboBox _resources = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 420 };
     private readonly CheckBox _autoAnalyse = new() { Text = "Analyse new projects automatically", AutoSize = true };
     private readonly ListView _templates;
     private readonly TableLayoutPanel _about;
@@ -347,10 +348,12 @@ sealed class MainForm : Form
         string lastElapsed = last != null ? RunStatus.FormatElapsed(last.TotalElapsed) : "";
         string name = _host.Settings.DisplayName(p.Path);
 
+        // Only a level chosen for the project is shown; the Config level is the norm.
+        string level = runner.LevelOverride(p.Path) is { } chosen ? $" · {chosen} resource use" : "";
         if (runner.Current is { } run && runner.IsRunning(p.Path))
-            return new Row(p.Path, name, p.Name, run.Status, RunStatus.FormatElapsed(run.TotalElapsed), lastAnalysed, files, Color.FromArgb(0, 90, 200));
+            return new Row(p.Path, name, p.Name, run.Status + level, RunStatus.FormatElapsed(run.TotalElapsed), lastAnalysed, files, Color.FromArgb(0, 90, 200));
         if (runner.QueuePosition(p.Path) is > 0 and var position)
-            return new Row(p.Path, name, p.Name, position == 1 ? "Queued (next)" : $"Queued ({position})", "", lastAnalysed, files, SystemColors.GrayText);
+            return new Row(p.Path, name, p.Name, (position == 1 ? "Queued (next)" : $"Queued ({position})") + level, "", lastAnalysed, files, SystemColors.GrayText);
         if (_host.Settings.IsIgnored(p.Path))
             return new Row(p.Path, name, p.Name, "Ignored", lastElapsed, lastAnalysed, files, SystemColors.GrayText);
 
@@ -389,6 +392,8 @@ sealed class MainForm : Form
                 Enabled = !ignored && project.State != ProjectState.Empty && _host.Settings.OutputRoot != null,
                 Font = project.State == ProjectState.NotAnalysed && !ignored ? bold : _grid.Font,
             });
+        if (running || queued)
+            items.Add(ResourceMenu(project.Path, queued));
         if (!running && !queued && project.OutputPath.Length > 0 && Directory.Exists(project.OutputPath))
             items.Add(new ToolStripMenuItem("Analyse from scratch...", null, (_, _) => AnalyseFromScratch(project.Path))
             {
@@ -420,6 +425,29 @@ sealed class MainForm : Form
         items.Add(new ToolStripSeparator());
         items.Add(new ToolStripMenuItem("Delete project...", null, (_, _) => DeleteProjects([project])) { Enabled = !running && !queued });
     }
+
+    /// <summary>"Resource use" submenu of a running or queued project: the Config level or one for this analysis.</summary>
+    private ToolStripMenuItem ResourceMenu(string path, bool queued)
+    {
+        ResourceLevel? chosen = _host.Runner.LevelOverride(path);
+        ResourceLevel configured = _host.Settings.Resources;
+        var menu = new ToolStripMenuItem("Resource use");
+        menu.DropDownItems.Add(new ToolStripMenuItem($"As in Config ({configured})", null, (_, _) => _host.Runner.SetLevel(path, null))
+        {
+            Checked = chosen == null,
+        });
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var level in ResourceLevels.All)
+            menu.DropDownItems.Add(new ToolStripMenuItem(ResourceLabel(level), null, (_, _) => _host.Runner.SetLevel(path, level))
+            {
+                Checked = chosen == level,
+                ToolTipText = queued && level > configured ? "Also moves the project to the front of the queue." : null,
+            });
+        return menu;
+    }
+
+    private static string ResourceLabel(ResourceLevel level) =>
+        $"{level}: {level.Details()}" + (level == ResourceLevels.Default ? " (default)" : "");
 
     /// <summary>Right-click menu of several selected projects.</summary>
     private void BuildSelectionMenu(ToolStripItemCollection items, List<Project> selected)
@@ -599,6 +627,7 @@ sealed class MainForm : Form
         foreach (var (label, _) in WhisperModels) _whisperModel.Items.Add(label);
         foreach (var (label, _) in Languages) _language.Items.Add(label);
         foreach (var (label, _) in Efforts) _effort.Items.Add(label);
+        foreach (var level in ResourceLevels.All) _resources.Items.Add(ResourceLabel(level));
 
         var table = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Padding = new Padding(12) };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -653,13 +682,17 @@ sealed class MainForm : Form
             + $"Empty = the default ({AppSettings.DefaultClaudeProfile}). Sign in once with that profile in Claude Code first.");
         Field("Claude thinking", _effort, note: "More thinking can give better reports but takes longer.");
         Field("Maximum key moments", _maxFrames, note: "How many moments may be captured as frames (0 = the default, 30).");
+        Heading("Computer use");
+        Field("Resource use", _resources, note: "How much of the computer an analysis may use, so other apps stay responsive. "
+            + "A running analysis changes as soon as you save.\nTo finish one project sooner, right-click it while it runs or waits "
+            + "in the queue and choose its own resource use.");
 
         var save = new Button { Text = "Save", AutoSize = true, Padding = new Padding(16, 2, 16, 2) };
         save.Click += (_, _) => SaveConfig();
         var revert = new Button { Text = "Revert", AutoSize = true };
         revert.Click += (_, _) => LoadConfig();
         var buttons = new FlowLayoutPanel { AutoSize = true, Padding = new Padding(0, 16, 0, 0) };
-        buttons.Controls.AddRange([save, revert, new Label { Text = "Changes apply to the next analysis.", AutoSize = true, Padding = new Padding(8, 8, 0, 0), ForeColor = SystemColors.GrayText }]);
+        buttons.Controls.AddRange([save, revert, new Label { Text = "Changes apply to the next analysis; resource use applies right away.", AutoSize = true, Padding = new Padding(8, 8, 0, 0), ForeColor = SystemColors.GrayText }]);
         table.Controls.Add(buttons, 1, table.RowCount++);
 
         var page = new TabPage("Config") { AutoScroll = true };
@@ -680,6 +713,7 @@ sealed class MainForm : Form
         _language.SelectedIndex = Math.Max(0, Array.FindIndex(Languages, m => m.Value == s.Language));
         _effort.SelectedIndex = Math.Max(0, Array.FindIndex(Efforts, m => m.Value == s.Effort));
         _maxFrames.Value = Math.Clamp(s.MaxFrames ?? 0, 0, 100);
+        _resources.SelectedIndex = Math.Max(0, Array.IndexOf(ResourceLevels.All, s.Resources));
         _autoAnalyse.Checked = s.AutoAnalyse;
     }
 
@@ -729,6 +763,7 @@ sealed class MainForm : Form
         s.Language = Languages[_language.SelectedIndex].Value;
         s.Effort = Efforts[_effort.SelectedIndex].Value;
         s.MaxFrames = _maxFrames.Value > 0 ? (int)_maxFrames.Value : null;
+        s.Resources = ResourceLevels.All[_resources.SelectedIndex];
         if (_autoAnalyse.Checked != s.AutoAnalyse)
         {
             s.AutoAnalyse = _autoAnalyse.Checked;

@@ -47,7 +47,7 @@ sealed class TrayApp : ApplicationContext, IAppHost
         _settings = AppSettings.Load(out string? settingsLoadError);
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _runner = new AnalysisRunner(_ui, LoadCore, _settings.CoreArguments,
-            new RunHistory(AppPaths.History), _settings.DisplayName, Path.Combine(AppPaths.Data, "pending.json"));
+            new RunHistory(AppPaths.History), _settings.DisplayName, Path.Combine(AppPaths.Data, "pending.json"), () => _settings.Resources);
 
         _menu = new ContextMenuStrip();
         _menu.Items.Add(new ToolStripMenuItem("Status", null, (_, _) => ShowWindow()) { Font = new Font(_menu.Font, FontStyle.Bold) });
@@ -154,6 +154,7 @@ sealed class TrayApp : ApplicationContext, IAppHost
         }
         if (foldersChanged)
             WatchProjects();
+        _runner.ApplyDefaultLevel();
         Rescan();
     }
 

@@ -116,6 +116,9 @@ sealed class AppSettings
     /// <summary>Maximum moments to capture as evidence (<c>--max-frames</c>); null = the core's default.</summary>
     public int? MaxFrames { get; set; }
 
+    /// <summary>How much of the computer analyses may use, unless a project is given its own level.</summary>
+    public ResourceLevel Resources { get; set; } = ResourceLevels.Default;
+
     /// <summary>The core options these settings select, in addition to input and output.</summary>
     public List<string> CoreArguments()
     {

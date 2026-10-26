@@ -19,6 +19,12 @@ sealed class ActiveRun(string projectPath, string name, string logPath, TimeSpan
     public bool Cancelled { get; set; }
     public bool Fresh { get; init; }
 
+    /// <summary>The resource level chosen for this project; null = the one in Config.</summary>
+    public ResourceLevel? LevelOverride { get; set; }
+
+    /// <summary>The resource level in force.</summary>
+    public ResourceLevel Level { get; set; }
+
     /// <summary>E.g. "Transcribing audio… 45%".</summary>
     public string Status => RunStatus.Describe(Stage, Percent, Activity);
 
@@ -32,7 +38,8 @@ sealed class ActiveRun(string projectPath, string name, string logPath, TimeSpan
 
 /// <summary>
 /// Runs analyses one at a time (transcription already uses every CPU core) by starting the Python core as a
-/// hidden child process and following its JSON progress. The full output goes to one log file per run from the
+/// hidden child process and following its JSON progress. The core and the processes it starts run in a job object
+/// that limits their share of the CPU and their priority (<see cref="ResourceLevel"/>), changeable while they run. The full output goes to one log file per run from the
 /// first line on, ending with the core's performance summary. Every event is raised on the UI thread.
 /// </summary>
 sealed class AnalysisRunner : IDisposable
@@ -44,17 +51,22 @@ sealed class AnalysisRunner : IDisposable
     private readonly Func<string, string> _displayName;
     private readonly List<QueueItem> _queue = [];
     private readonly string? _pendingPath;
+    private readonly Func<ResourceLevel> _defaultLevel;
     private Process? _process;
+    private ResourceJob? _job;
+    private StreamWriter? _log;
     private DateTime _pendingSaved;
 
     /// <param name="Carry">Time already spent, for an interrupted analysis that is resumed; null = from the history.</param>
-    private sealed record QueueItem(string Path, string Name, string Output, bool Fresh, TimeSpan? Carry = null);
+    /// <param name="Level">The resource level chosen for this project; null = the one in Config.</param>
+    private sealed record QueueItem(string Path, string Name, string Output, bool Fresh, TimeSpan? Carry = null, ResourceLevel? Level = null);
 
     /// <summary>What was running or queued, saved so an analysis cut short by an install, a crash or sign-out resumes.</summary>
     internal sealed record PendingWork(PendingRun? Running, List<PendingRun> Queue);
 
     /// <param name="Spent">Processing time of the running analysis so far (null for queued projects).</param>
-    internal sealed record PendingRun(string Path, bool Fresh, TimeSpan? Spent = null);
+    /// <param name="Level">The resource level chosen for the project; null = the one in Config.</param>
+    internal sealed record PendingRun(string Path, bool Fresh, TimeSpan? Spent = null, ResourceLevel? Level = null);
 
     /// <summary>Something changed: queue, progress or a result.</summary>
     public event Action? Changed;
@@ -66,9 +78,11 @@ sealed class AnalysisRunner : IDisposable
     /// <param name="options">Core options from the settings, read when each analysis starts.</param>
     /// <param name="displayName">The user's name for a project folder, recorded in the run statistics.</param>
     /// <param name="pendingPath">Where the running and queued projects are saved (see <see cref="ResumePending"/>); null = not saved.</param>
+    /// <param name="defaultLevel">The resource level from Config, for projects without one of their own.</param>
     public AnalysisRunner(SynchronizationContext ui, Func<CoreConfig?> core, Func<IEnumerable<string>> options, RunHistory history,
-        Func<string, string>? displayName = null, string? pendingPath = null)
+        Func<string, string>? displayName = null, string? pendingPath = null, Func<ResourceLevel>? defaultLevel = null)
     {
+        _defaultLevel = defaultLevel ?? (() => ResourceLevels.Default);
         _pendingPath = pendingPath;
         _ui = ui;
         _core = core;
@@ -92,6 +106,66 @@ sealed class AnalysisRunner : IDisposable
     public bool IsQueued(string projectPath) => QueuePosition(projectPath) > 0;
 
     public RunResult? LastResult(string projectPath) => _history.Get(projectPath);
+
+    /// <summary>The resource level chosen for a running or queued project; null = the one in Config (or not queued).</summary>
+    public ResourceLevel? LevelOverride(string projectPath) =>
+        IsRunning(projectPath) ? Current!.LevelOverride : _queue.Find(q => SamePath(q.Path, projectPath))?.Level;
+
+    /// <summary>
+    /// Chooses the resource level of a running or queued project (null = the one in Config). A running analysis
+    /// changes at once; a queued project raised above the Config level moves to the front of the queue.
+    /// </summary>
+    public void SetLevel(string projectPath, ResourceLevel? level)
+    {
+        if (IsRunning(projectPath))
+        {
+            Current!.LevelOverride = level;
+            ApplyLevel();
+        }
+        else if (_queue.FindIndex(q => SamePath(q.Path, projectPath)) is >= 0 and var i)
+        {
+            var item = _queue[i] with { Level = level };
+            _queue.RemoveAt(i);
+            _queue.Insert(level > _defaultLevel() ? 0 : i, item);
+        }
+        else
+            return;
+        SavePending();
+        Changed?.Invoke();
+    }
+
+    /// <summary>Applies the Config level to a running analysis that has no level of its own (after Config is saved).</summary>
+    public void ApplyDefaultLevel()
+    {
+        if (Current is { LevelOverride: null })
+        {
+            ApplyLevel();
+            Changed?.Invoke();
+        }
+    }
+
+    private void ApplyLevel()
+    {
+        if (Current is not { } run)
+            return;
+        ResourceLevel level = run.LevelOverride ?? _defaultLevel();
+        if (level == run.Level)
+            return;
+        run.Level = level;
+        string line;
+        try
+        {
+            _job?.Apply(level);
+            line = $"# Resources: changed to {level.Describe()}";
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            line = $"# Resources: could not change to {level}: {ex.Message}";
+        }
+        if (_log is { } log)
+            lock (log)
+                log.WriteLine(line);
+    }
 
     /// <summary>Queues a project; it starts right away when nothing else runs.</summary>
     /// <param name="fresh">Clear the project's cached work first, so every step runs again (the core's <c>--fresh</c>).</param>
@@ -120,7 +194,7 @@ sealed class AnalysisRunner : IDisposable
         {
             if (find(item.Path) is not { } project || project.OutputPath.Length == 0 || IsRunning(project.Path) || IsQueued(project.Path))
                 continue;
-            _queue.Add(new QueueItem(project.Path, project.Name, project.OutputPath, item.Fresh, item.Spent));
+            _queue.Add(new QueueItem(project.Path, project.Name, project.OutputPath, item.Fresh, item.Spent, item.Level));
             resumed.Add(project.Path);
         }
         StartNext();
@@ -153,8 +227,8 @@ sealed class AnalysisRunner : IDisposable
             return;
         _pendingSaved = DateTime.Now;
         var pending = new PendingWork(
-            Current is { } run ? new PendingRun(run.ProjectPath, run.Fresh, run.TotalElapsed) : null,
-            _queue.Select(q => new PendingRun(q.Path, q.Fresh, q.Carry)).ToList());
+            Current is { } run ? new PendingRun(run.ProjectPath, run.Fresh, run.TotalElapsed, run.LevelOverride) : null,
+            _queue.Select(q => new PendingRun(q.Path, q.Fresh, q.Carry, q.Level)).ToList());
         try
         {
             if (pending.Running == null && pending.Queue.Count == 0)
@@ -201,11 +275,14 @@ sealed class AnalysisRunner : IDisposable
     {
         if (Current != null || _queue.Count == 0)
             return;
-        var (path, name, output, fresh, carry) = _queue[0];
+        var (path, name, output, fresh, carry, levelOverride) = _queue[0];
         _queue.RemoveAt(0);
 
         string logPath = Path.Combine(AppPaths.Logs, $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss}_{Sanitize(name)}.log");
-        var run = new ActiveRun(path, name, logPath, carry ?? CarriedTime(_history.Get(path), fresh)) { Fresh = fresh };
+        var run = new ActiveRun(path, name, logPath, carry ?? CarriedTime(_history.Get(path), fresh))
+        {
+            Fresh = fresh, LevelOverride = levelOverride, Level = levelOverride ?? _defaultLevel(),
+        };
         Current = run;
         SavePending();
 
@@ -226,6 +303,7 @@ sealed class AnalysisRunner : IDisposable
             log.WriteLine($"# Build:    {BuildInfo.Built}");
             log.WriteLine($"# Options:  {(options.Count > 0 ? string.Join(' ', options) : "(defaults)")}");
             log.WriteLine($"# Claude:   {ClaudeProfile(options)}");
+            log.WriteLine($"# Resources: {run.Level.Describe()}" + (levelOverride != null ? " (chosen for this project)" : ""));
 
             CoreConfig? core = _core();
             if (core == null)
@@ -265,6 +343,8 @@ sealed class AnalysisRunner : IDisposable
                 }
             };
             process.Start();
+            _log = log;
+            _job = LimitResources(process, run.Level, log);
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             _process = process;
@@ -273,6 +353,26 @@ sealed class AnalysisRunner : IDisposable
         {
             log?.Dispose();
             Complete(run, RunOutcome.Failed, $"Could not start the analysis: {ex.Message}");
+        }
+    }
+
+    /// <summary>Puts the core in a job with the level's limits; on failure it runs unlimited and the log says why.</summary>
+    private static ResourceJob? LimitResources(Process process, ResourceLevel level, StreamWriter log)
+    {
+        ResourceJob? job = null;
+        try
+        {
+            job = new ResourceJob();
+            job.Apply(level);
+            job.Add(process);
+            return job;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            job?.Dispose();
+            lock (log)
+                log.WriteLine($"# Resources: could not be limited, running without a limit: {ex.Message}");
+            return null;
         }
     }
 
@@ -315,6 +415,9 @@ sealed class AnalysisRunner : IDisposable
     {
         _process?.Dispose();
         _process = null;
+        _job?.Dispose();
+        _job = null;
+        _log = null;
         var (outcome, message) = run.Cancelled ? (RunOutcome.Cancelled, "Stopped by you. Analysing again continues where it stopped.")
             : exitCode == 0 ? (RunOutcome.Succeeded, run.GenericReport ? "No template fits; wrote a general report." : "")
             : (RunOutcome.Failed, run.FinalMessage is { Length: > 0 } m ? m
@@ -362,6 +465,7 @@ sealed class AnalysisRunner : IDisposable
         _queue.Clear();
         Kill();
         _process?.Dispose();
+        _job?.Dispose();
     }
 
     /// <summary>The Claude Code profile the core signs in with (its <c>--claude-profile</c>).</summary>

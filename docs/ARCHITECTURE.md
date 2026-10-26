@@ -282,6 +282,7 @@ apps/recording-reports/
     Analysis/
       AnalysisRunner.cs  queue, starts the core per project, follows its events, writes the log
       CoreProcess.cs     core.json (how to start the core) and the JSON event parser
+      ResourceLimit.cs   resource levels and the job object that applies them to the core and its processes
     Projects/
       ProjectCatalog.cs  reads the projects folder into Project records and their state
       AutoAnalysis.cs    which new projects start on their own
@@ -310,6 +311,12 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
   code is and which environment variables to set (ffmpeg and model folders). For each analysis the app runs
   `python -m media_analysis report <project> <output> --json` with the options from Config, the Claude profile, the log
   path and the project's name. One analysis runs at a time; the rest wait in a queue.
+- **Resource use.** The core runs in a Windows job object, so its CPU cap and priority also cover the processes it
+  starts (ffmpeg, Claude Code). Config sets the level for all analyses (Light 25% of the CPU at idle priority,
+  Balanced 50% below normal (default), Fast 75% below normal, Full no limit at normal priority); a running or queued
+  project can get its own level from its right-click menu. Changes apply to a running analysis at once and are
+  written to its log; a queued project raised above the Config level moves to the front. A project's own level is
+  kept in `pending.json`, so it survives a restart, and is dropped when the analysis ends. Only the CPU is limited.
 - **Logs and history.** Each analysis gets a log in `<data folder>\logs`: a header (project, options, Claude profile),
   then every event line from the core, so the performance summary ends it. The window shows a readable view of it,
   live while it runs. The outcome, time and log path of the last run per project are kept in `history.json`.

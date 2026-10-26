@@ -6,6 +6,21 @@ and [DEPLOYMENT.md](DEPLOYMENT.md); this file keeps the reasons that the code do
 
 ---
 
+## 2026-10-26 · Recording Reports limits the resources an analysis uses
+
+**Change.** Analyses run in a Windows job object with a CPU cap and a priority class. Config has a *Resource use*
+level (Light 25% of the CPU at idle priority, Balanced 50% below normal (default), Fast 75% below normal, Full no
+limit at normal priority). A running or queued project can be given its own level from its right-click menu.
+
+**Why.** Transcription used every core at normal priority, which slowed the rest of the computer, and reports are
+not needed right away. A job object covers the core and everything it starts (ffmpeg, Claude Code) with one limit,
+and its limits can change while the analysis runs, so a project can be sped up without restarting it. Limiting the
+core's threads instead would need a restart to speed up and wouldn't cover ffmpeg.
+
+**Consequences.** The core is unchanged; Footage Editor isn't limited. At Balanced the local stages (mostly
+transcription) can take up to twice as long as before; the Claude stages wait on the network and barely change. Raising a queued project above the Config level also moves it to the front of the queue. Only the
+CPU is limited, not the GPU (transcription uses an NVIDIA GPU when there is one), memory or disk.
+
 ## 2026-10-25 · Footage Editor built on the edit workflow and a local service
 
 **Change.** New `edit` workflow (profiles, footage view, cut rules, first edit, chat tools, versions, exports), a
