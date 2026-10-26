@@ -10,7 +10,7 @@ and [DEPLOYMENT.md](DEPLOYMENT.md); this file keeps the reasons that the code do
 
 **Change.** A `correct` stage after transcription: Claude returns only the transcript lines it changes to fix
 clearly misheard words, using the whole meeting, the language mix and the terms list (`--correct-transcript`, a
-Config checkbox, on by default in the app); the changes go to `transcript-corrections.md`.
+Config checkbox, on by default in the app); the changes go to `.cache/transcript-corrections.md`.
 
 **Why.** Claude can't take audio (all current models take text and images only), but it reads text well, and the
 weak spot of Azure in Vietnamese is English terms. Compared on the 2026-10-26 stand-up (same Azure transcript,
@@ -43,7 +43,7 @@ language until analysed again. The transcript view changed, so analysing again r
 ## 2026-10-26 · Every analysis records how it was made
 
 **Change.** Each cached result has a `.made-with.json` beside it (when, core version, transcriber and its settings,
-Claude models, backend and effort). Each run writes `how-made.md` next to its result, and the run statistics gain
+Claude models, backend and effort). Each run writes `how-made.md` into the output's `.cache/`, and the run statistics gain
 the Claude models that answered, per-stage `made_with` and `reused`, and the resource use. Recording Reports passes
 its resource level and has *How it was made* in the project menu.
 
@@ -51,8 +51,9 @@ its resource level and has *How it was made* in the project menu.
 The settings alone weren't enough: the Claude model was recorded as "account default", and reused results were
 described by the current settings, not by what made them.
 
-**Consequences.** The details are a separate file, not part of report.md, so a report can be shared without
-naming the Azure resource or the Claude profile. Results cached before this change are listed as "details not kept".
+**Consequences.** The details are working data in `.cache/`, not part of the deliverable (report.md and
+reference/), which users share; so they don't name the Azure resource or the Claude profile. `--clean-cache`
+removes them with the rest of the cache. Results cached before this change are listed as "details not kept".
 The resource level is the one at the start; changes during a run are in the app's log.
 
 ## 2026-10-26 · Cloud transcription is Azure AI Speech, not Azure OpenAI Whisper

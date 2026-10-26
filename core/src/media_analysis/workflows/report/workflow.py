@@ -14,7 +14,7 @@ from media_analysis.engine.events import EventSink, null_sink
 from media_analysis.engine.how_made import FILE_NAME as HOW_MADE_FILE
 from media_analysis.engine.how_made import how_made
 from media_analysis.engine.settings import Settings
-from media_analysis.engine.workflow import RunContext, RunOptions, Workflow
+from media_analysis.engine.workflow import CACHE_DIR_NAME, RunContext, RunOptions, Workflow
 from media_analysis.providers.llm import create_llm
 from media_analysis.understand.condense import CondenseStage
 from media_analysis.understand.correct import CORRECTIONS_FILE, CorrectStage, corrections_markdown
@@ -82,7 +82,11 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
         ctx.timer.audio_seconds = sum(f.duration for f in ingest.files if f.uses_audio)
         transcript = TranscribeStage(ctx).run(ingest)
         languages = self._languages = language_shares(transcript)
-        corrections_path = opts.output_dir / CORRECTIONS_FILE
+        # Working files for whoever wants to check how a report was made; the deliverable is report.md and reference/.
+        working = opts.output_dir / CACHE_DIR_NAME
+        for name in (HOW_MADE_FILE, CORRECTIONS_FILE):
+            (opts.output_dir / name).unlink(missing_ok=True)  # where builds of 2026-10-26 put them
+        corrections_path = working / CORRECTIONS_FILE
         corrections_path.unlink(missing_ok=True)
         if self.settings.correct_transcript:
             corrected = CorrectStage(ctx).run(ingest, transcript)
@@ -111,7 +115,7 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
             ("Template", f"{template.name} (`{template.id}`), {chosen}"),
             ("Key moments", f"up to {self.settings.evidence.max_requests}; {len(evidence.items)} frame(s) in the report"),
         ]
-        (opts.output_dir / HOW_MADE_FILE).write_text(
+        (working / HOW_MADE_FILE).write_text(
             how_made("How this report was made", self.timer, self.settings, self.started, extras), encoding="utf-8")
         return ReportResult(report_path, classification, len(evidence.items), warnings, languages)
 

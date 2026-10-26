@@ -19,12 +19,12 @@ embeds those frames as evidence.
 ```
 <output>/
   report.md                        # the report, built from the matching template
-  how-made.md                      # how it was made: transcription engine, Claude model, settings, reused steps
-  transcript-corrections.md        # only with --correct-transcript: each line Claude corrected, before and after
   reference/
     frames/<file>_<hh-mm-ss>.jpg   # only the frames the report uses
     text/<file>_<hh-mm-ss>.md      # text read from each of those frames
-  .cache/                          # working data (transcript, scan, ...) so reruns skip finished work
+  .cache/                          # working data (transcript, scan, ...) so reruns skip finished work, plus
+                                   #   how-made.md (engine, Claude model, settings, reused steps) and
+                                   #   transcript-corrections.md (with --correct-transcript)
 ```
 
 ## How it works
@@ -189,7 +189,7 @@ Useful options:
 | `--azure-endpoint <url>` | The resource's AI services endpoint, e.g. `https://<name>.services.ai.azure.com/` (`<name>.cognitiveservices.azure.com` works too; the regional `stt.speech.microsoft.com` one doesn't). `media-analysis check-transcription` tests it |
 | `--language en\|vi` | Force one language; by default it is detected and mixed speech is allowed (the app always detects) |
 | `--max-frames <n>` | Maximum moments to capture (default 30) |
-| `--correct-transcript` | Have Claude fix clearly misheard words in the transcript before the report (listed in `transcript-corrections.md`) |
+| `--correct-transcript` | Have Claude fix clearly misheard words in the transcript before the report (listed in `.cache/transcript-corrections.md`) |
 | `--claude-model <id>` | Claude model (default: your account's default model, as in Claude Code) |
 | `--effort <level>` | Claude thinking effort: `low`, `medium`, `high`, `xhigh`, `max` (default: the model's default) |
 | `--claude-profile <dir>` | Claude Code config folder whose login to use, e.g. `~/.claude-work` (default: Claude Code's default, `~/.claude`) |

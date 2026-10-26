@@ -1,6 +1,6 @@
-"""How an analysis was made, as Markdown next to its result: the settings that shaped it and, step by step, whether the
-step ran or reused an earlier result and what did the work (transcription engine, Claude model). Kept apart from the
-deliverable so that can be shared without these details."""
+"""How an analysis was made, as Markdown in the output's working folder (.cache): the settings that shaped it and,
+step by step, whether the step ran or reused an earlier result and what did the work (transcription engine, Claude
+model). Kept out of the deliverable, which is only the report and its references."""
 
 from __future__ import annotations
 

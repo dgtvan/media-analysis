@@ -220,7 +220,8 @@ class EditWorkflow(Workflow[EditOptions, EditResult]):
         extras = [("Speech", describe(language_shares(snapshot.transcript)) or "none transcribed"),
                   ("Profile", f"{profile.name} (`{profile.id}`)"),
                   ("Length limit", f"{limit} s" if limit else "none")]
-        (opts.output_dir / "export" / HOW_MADE_FILE).write_text(
+        (opts.output_dir / "export" / HOW_MADE_FILE).unlink(missing_ok=True)  # where builds of 2026-10-26 put it
+        (opts.output_dir / CACHE_DIR_NAME / HOW_MADE_FILE).write_text(
             how_made("How this analysis was made", self.timer, self.settings, self.started, extras), encoding="utf-8")
         (opts.output_dir / SNAPSHOT_FILE).write_text(snapshot.model_dump_json(), encoding="utf-8")
         return EditResult(version=info, plan=store.load(), warnings=first.warnings)

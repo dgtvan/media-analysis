@@ -432,7 +432,7 @@ sealed class MainForm : Form
         string? log = running ? runner.Current!.LogPath : runner.LastResult(project.Path)?.LogPath;
         items.Add(new ToolStripMenuItem("View logs", null, (_, _) => ShowLog(project.Path)) { Enabled = log != null && File.Exists(log) });
         items.Add(new ToolStripMenuItem("Open report", null, (_, _) => OpenReport(project.Path)) { Enabled = project.ReportWrittenUtc != null });
-        string howMade = Path.Combine(project.OutputPath, "how-made.md");
+        string howMade = Path.Combine(project.OutputPath, ".cache", "how-made.md");
         items.Add(new ToolStripMenuItem("How it was made", null, (_, _) => OpenExternal(howMade))
         {
             Enabled = project.OutputPath.Length > 0 && File.Exists(howMade),
@@ -748,7 +748,7 @@ sealed class MainForm : Form
         Field("Claude thinking", _effort, note: "More thinking can give better reports but takes longer.");
         Field("Maximum key moments", _maxFrames, note: "How many moments may be captured as frames (0 = the default, 30).");
         Field("", _correctTranscript, note: "Claude fixes words speech recognition clearly misheard (e.g. \"subcription\" → subscription) before writing the report;\n"
-            + "about 20 s and one more Claude call per meeting. The changes are listed in transcript-corrections.md next to the report.");
+            + "about 20 s and one more Claude call per meeting. The changes are listed in .cache\\transcript-corrections.md.");
         Heading("Computer use");
         Field("Resource use", _resources, note: "How much of this computer an analysis may use, so other apps stay responsive. "
             + "It limits the work done here, such as\ntranscribing with Local Whisper; Azure transcription runs in the cloud and isn't slowed down. "

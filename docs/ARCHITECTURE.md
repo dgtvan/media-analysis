@@ -177,7 +177,7 @@ Between transcription and the rest, Claude reads the whole transcript as numbere
 speakers), plus the language mix and the technical terms list, and returns only the lines it changed: words clearly
 misheard, mostly English terms and names inside Vietnamese speech. Lines keep their language, wording and fillers;
 changed lines lose their word times. The corrected transcript is what the later stages read; the original stays in
-the cache, and `transcript-corrections.md` lists every change. On a 12-minute Vietnamese stand-up it corrected 11
+the cache, and `.cache/transcript-corrections.md` lists every change. On a 12-minute Vietnamese stand-up it corrected 11
 of 37 lines in 22 s (one call, about $0.09 at API rates).
 
 **Languages of the speech.** Every segment keeps its language when the engine gives one (Azure per phrase, local
@@ -296,24 +296,23 @@ Every finished or failed run also appends one JSON object to `<data folder>/stat
 the input files with their fingerprints, template, settings, total time, Claude usage and models, and the per-stage
 records including what made each stage's results. The fields are listed in the README.
 
-Each finished run also writes `how-made.md` next to its result (`engine/how_made.py`): the run's date and length,
+Each finished run also writes `how-made.md` into the output's `.cache/` (`engine/how_made.py`): the run's date and length,
 the resource use the app reported (`--resource-use`), the Claude login, model and effort, workflow lines (template
 and key moments, or profile and length limit), and a table of steps with what this run did (ran, reused, skipped)
-and what made each result (transcriber, Claude model, or this computer; for reused results, when). It is kept apart
-from the report so the report can be shared without these details.
+and what made each result (transcriber, Claude model, or this computer; for reused results, when). It is working
+data like the rest of `.cache/`: the deliverable is only the report and its references.
 
 ### 3.6 Output folder
 
 ```
 <output>/
   report.md                        the report, with relative links into reference/
-  how-made.md                      how the report was made (section 3.5)
-  transcript-corrections.md        only with --correct-transcript: the lines Claude corrected
   reference/
     frames/<file>_<hh-mm-ss>.jpg   only the frames the report uses
     text/<name>.md                 the text read from each of those frames
     suggested-template.md          only when no template fit
-  .cache/                          working data, including the full timecoded transcript
+  .cache/                          working data, including the full timecoded transcript, how-made.md
+                                   (section 3.5) and, with --correct-transcript, transcript-corrections.md
 ```
 
 `reference/` is rebuilt on every run so it never keeps frames an earlier report used. The transcript is working data,
@@ -449,13 +448,13 @@ local      local (words,   local    local    Claude      local      Claude
 ```
 <data folder>/projects/<id>/
   project.json            name, profile, maximum length, imported footage paths (footage is never copied)
-  .cache/                 stage results (shared understanding + edit stages)
+  .cache/                 stage results (shared understanding + edit stages), how-made.md
   media/<fingerprint>.proxy.mp4, .strip.jpg   proxies (720p, constant frame rate, keyframe every 0.5 s), filmstrips
   edit/index.json, v0001.json, ...            edit versions
   understanding.json      what the last finished analysis found (footage, transcript, shots, descriptions, the
                           view Claude reads), so the project opens and chats without re-running any stage
   chat/history.jsonl, memory.md, activity.jsonl   the conversation, lasting preferences, and analysis steps
-  export/edit.json, edit.md, how-made.md
+  export/edit.json, edit.md
 ```
 
 ## 6. Testing
