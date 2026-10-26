@@ -25,22 +25,31 @@ sealed class MainForm : Form
     private readonly TextBox _projectsRoot = new() { Width = 520 };
     private readonly TextBox _outputRoot = new() { Width = 520 };
     private readonly ComboBox _claudeProfile = new() { Width = 520, DropDownStyle = ComboBoxStyle.DropDown };
+    private readonly ComboBox _transcriber = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 420 };
     private readonly ComboBox _whisperModel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
-    private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+    private readonly TextBox _azureEndpoint = new() { Width = 520, PlaceholderText = "https://<resource>.services.ai.azure.com/" };
+    private readonly TextBox _azureKey = new() { Width = 520, UseSystemPasswordChar = true };
+    private readonly Label _azureTestResult = new() { AutoSize = true, MaximumSize = new Size(640, 0), Padding = new Padding(0, 7, 0, 0) };
+    private readonly List<Control> _localRows = [];
+    private readonly List<Control> _azureRows = [];
     private readonly ComboBox _effort = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly NumericUpDown _maxFrames = new() { Minimum = 0, Maximum = 100, Width = 80 };
     private readonly ComboBox _resources = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 420 };
     private readonly CheckBox _autoAnalyse = new() { Text = "Analyse new projects automatically", AutoSize = true };
+    private readonly CheckBox _correctTranscript = new() { Text = "Correct misheard words in the transcript first", AutoSize = true };
     private readonly ListView _templates;
     private readonly TableLayoutPanel _about;
 
+    private static readonly (string Label, string? Value)[] Transcribers =
+    [
+        ("On this computer (Local Whisper, free)", null),
+        ("Azure AI Speech (in the cloud, much faster, billed to Azure)", AppSettings.AzureTranscriber),
+    ];
     private static readonly (string Label, string? Value)[] WhisperModels =
     [
         ("Large v3 (best, default)", null), ("Large v3 turbo (faster, a bit less accurate)", "large-v3-turbo"),
         ("Medium", "medium"), ("Small (fastest, least accurate)", "small"),
     ];
-    private static readonly (string Label, string? Value)[] Languages =
-        [("Detect (English, Vietnamese or mixed)", null), ("English", "en"), ("Vietnamese", "vi")];
     private static readonly (string Label, string? Value)[] Efforts =
     [
         ("Model default", null), ("Low", "low"), ("Medium", "medium"), ("High", "high"), ("Extra high", "xhigh"), ("Max", "max"),
@@ -195,6 +204,11 @@ sealed class MainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", FillWeight = 32, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Elapsed", FillWeight = 9, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Last analysed", FillWeight = 13, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            HeaderText = "Language", FillWeight = 13, ReadOnly = true,
+            ToolTipText = "The languages of the speech, detected when the project was analysed.",
+        });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Length", FillWeight = 9, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Files", FillWeight = 6, ReadOnly = true });
         foreach (DataGridViewColumn column in grid.Columns)
@@ -261,6 +275,8 @@ sealed class MainForm : Form
         string Files, Color StatusColor)
     {
         public string Length { get; init; } = "";
+        public string Language { get; init; } = "";
+        public string LanguageShares { get; init; } = "";
     }
 
     private void RefreshGrid()
@@ -277,7 +293,13 @@ sealed class MainForm : Form
             if (search.Length > 0 && !p.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
                 && !_host.Settings.DisplayName(p.Path).Contains(search, StringComparison.OrdinalIgnoreCase))
                 continue;
-            Row row = Describe(p) with { Length = _host.Durations.Describe(p) };
+            RunResult? result = _host.Runner.LastResult(p.Path);
+            Row row = Describe(p) with
+            {
+                Length = _host.Durations.Describe(p),
+                Language = result?.LanguageLabel ?? "",
+                LanguageShares = result?.LanguageShares ?? "",
+            };
             bool show = filter switch
             {
                 Filter.NotAnalysed => p.State == ProjectState.NotAnalysed && !_host.Settings.IsIgnored(p.Path),
@@ -318,10 +340,11 @@ sealed class MainForm : Form
         {
             var r = rows[i];
             var cells = _grid.Rows[i].Cells;
-            object[] values = [r.Name, r.Folder, r.Status, r.Elapsed, r.LastAnalysed, r.Length, r.Files];
+            object[] values = [r.Name, r.Folder, r.Status, r.Elapsed, r.LastAnalysed, r.Language, r.Length, r.Files];
             for (int c = 0; c < values.Length; c++)
                 if (!Equals(cells[c].Value, values[c]))
                     cells[c].Value = values[c];
+            cells[5].ToolTipText = r.LanguageShares;
             cells[2].Style.ForeColor = cells[2].Style.SelectionForeColor = r.StatusColor;
         }
 
@@ -409,6 +432,12 @@ sealed class MainForm : Form
         string? log = running ? runner.Current!.LogPath : runner.LastResult(project.Path)?.LogPath;
         items.Add(new ToolStripMenuItem("View logs", null, (_, _) => ShowLog(project.Path)) { Enabled = log != null && File.Exists(log) });
         items.Add(new ToolStripMenuItem("Open report", null, (_, _) => OpenReport(project.Path)) { Enabled = project.ReportWrittenUtc != null });
+        string howMade = Path.Combine(project.OutputPath, "how-made.md");
+        items.Add(new ToolStripMenuItem("How it was made", null, (_, _) => OpenExternal(howMade))
+        {
+            Enabled = project.OutputPath.Length > 0 && File.Exists(howMade),
+            ToolTipText = "Which transcription engine, Claude model and settings made the report, and which steps reused earlier results.",
+        });
         items.Add("Open project folder", null, (_, _) => OpenFolder(project.Path));
         items.Add(new ToolStripMenuItem("Open output folder", null, (_, _) => OpenFolder(project.OutputPath))
         {
@@ -624,8 +653,8 @@ sealed class MainForm : Form
 
     private TabPage CreateConfigPage()
     {
+        foreach (var (label, _) in Transcribers) _transcriber.Items.Add(label);
         foreach (var (label, _) in WhisperModels) _whisperModel.Items.Add(label);
-        foreach (var (label, _) in Languages) _language.Items.Add(label);
         foreach (var (label, _) in Efforts) _effort.Items.Add(label);
         foreach (var level in ResourceLevels.All) _resources.Items.Add(ResourceLabel(level));
 
@@ -638,15 +667,25 @@ sealed class MainForm : Form
         {
             Text = text, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Padding = new Padding(0, 12, 0, 4),
         }, 0, table.RowCount++);
-        void Field(string label, Control control, Control? extra = null, string? note = null)
+        // Returns the controls it added, so a field can be shown only for some choices.
+        List<Control> Field(string label, Control control, Control? extra = null, string? note = null)
         {
             int row = table.RowCount++;
-            table.Controls.Add(new Label { Text = label, AutoSize = true, Padding = new Padding(0, 7, 12, 0) }, 0, row);
+            var added = new List<Control> { new Label { Text = label, AutoSize = true, Padding = new Padding(0, 7, 12, 0) }, control };
+            table.Controls.Add(added[0], 0, row);
             table.Controls.Add(control, 1, row);
             if (extra != null)
+            {
                 table.Controls.Add(extra, 2, row);
+                added.Add(extra);
+            }
             if (note != null)
-                table.Controls.Add(new Label { Text = note, AutoSize = true, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 0, 0, 4) }, 1, table.RowCount++);
+            {
+                var noteLabel = new Label { Text = note, AutoSize = true, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 0, 0, 4) };
+                table.Controls.Add(noteLabel, 1, table.RowCount++);
+                added.Add(noteLabel);
+            }
+            return added;
         }
         Button Browse(Control target, string description)
         {
@@ -673,17 +712,46 @@ sealed class MainForm : Form
         Field("", _autoAnalyse, note: "Projects added after you turn this on are analysed once their files have stopped changing for "
             + $"{AutoAnalysis.SettleTime.TotalMinutes:0} minutes, one at a time.\nProjects that already exist are not affected; "
             + "use \"Analyse all not analysed\" for those. A failed or stopped analysis is not retried automatically.");
-        Heading("Analysis");
-        Field("Transcription model", _whisperModel, note: "Changing it transcribes projects again the next time they are analysed.");
-        Field("Spoken language", _language);
+        Heading("Transcription");
+        Field("Engine", _transcriber, note: "Where speech is turned into text. Changing the engine or the model transcribes projects again "
+            + "the next time they are analysed.");
+        _localRows.AddRange(Field("Model", _whisperModel, note: "Larger models are more accurate but slower. Without an NVIDIA "
+            + "graphics card, Large v3 takes about as long as the recording."));
+        var showKey = new CheckBox { Text = "Show", AutoSize = true, Padding = new Padding(4, 3, 0, 0) };
+        showKey.CheckedChanged += (_, _) => _azureKey.UseSystemPasswordChar = !showKey.Checked;
+        _azureRows.AddRange(Field("Endpoint", _azureEndpoint, note: "The resource's \"AI services endpoint\" (Azure portal, Keys and Endpoint, AI Services tab), "
+            + "not the \"Speech to Text\" one."));
+        // In one cell, so "Show" sits next to the box rather than past the column's long notes.
+        var keyRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        keyRow.Controls.AddRange([_azureKey, showKey]);
+        _azureRows.AddRange(Field("Key", keyRow, note: "Key 1 or Key 2 from the resource's Keys and Endpoint page. "
+            + "Saved encrypted, readable only by your Windows account."));
+        var test = new Button { Text = "Test connection", AutoSize = true };
+        test.Click += async (_, _) => await TestAzureAsync(test);
+        var testRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 2, 0, 4) };
+        testRow.Controls.AddRange([test, _azureTestResult]);
+        _azureRows.AddRange(Field("", testRow));
+        var portal = new LinkLabel { Text = "Open AI resources in the Azure portal", AutoSize = true, Padding = new Padding(0, 7, 0, 0) };
+        portal.LinkClicked += (_, _) => OpenExternal("https://portal.azure.com/#browse/Microsoft.CognitiveServices%2Faccounts");
+        _azureRows.AddRange(Field("Firewall", portal, note: "If the resource only accepts listed IP addresses: open it in the Azure portal, then Networking, tick\n"
+            + "'Add your client IP address' and Save (it takes a few minutes). Use that box rather than a what's-my-IP website: Azure may see a different address."));
+        var terms = new Button { Text = "Edit list…", AutoSize = true };
+        terms.Click += (_, _) => OpenExternal(AppSettings.EnsureTermsFile(AppPaths.Data));
+        _azureRows.AddRange(Field("Terms", terms, note: "Names and technical terms Azure should expect, one per line. Azure uses them for English speech;\n"
+            + "its Vietnamese model ignores them. Changing the list transcribes projects again the next time they are analysed."));
+        _transcriber.SelectedIndexChanged += (_, _) => ShowTranscriberFields();
+        Heading("Claude");
         Field("Claude profile", _claudeProfile, Browse(_claudeProfile, "Choose the Claude Code profile folder to sign in with"),
             "The Claude Code profile (config folder) whose login and subscription analyses use; Open report starts VS Code with it too.\n"
             + "The list shows the .claude* folders in your home folder that hold a login; you can also type or browse to another.\n"
             + $"Empty = the default ({AppSettings.DefaultClaudeProfile}). Sign in once with that profile in Claude Code first.");
         Field("Claude thinking", _effort, note: "More thinking can give better reports but takes longer.");
         Field("Maximum key moments", _maxFrames, note: "How many moments may be captured as frames (0 = the default, 30).");
+        Field("", _correctTranscript, note: "Claude fixes words speech recognition clearly misheard (e.g. \"subcription\" → subscription) before writing the report;\n"
+            + "about 20 s and one more Claude call per meeting. The changes are listed in transcript-corrections.md next to the report.");
         Heading("Computer use");
-        Field("Resource use", _resources, note: "How much of the computer an analysis may use, so other apps stay responsive. "
+        Field("Resource use", _resources, note: "How much of this computer an analysis may use, so other apps stay responsive. "
+            + "It limits the work done here, such as\ntranscribing with Local Whisper; Azure transcription runs in the cloud and isn't slowed down. "
             + "A running analysis changes as soon as you save.\nTo finish one project sooner, right-click it while it runs or waits "
             + "in the queue and choose its own resource use.");
 
@@ -709,10 +777,15 @@ sealed class MainForm : Form
         foreach (string profile in AppSettings.FindClaudeProfiles())
             _claudeProfile.Items.Add(profile);
         _claudeProfile.Text = s.ClaudeProfile ?? "";
+        _transcriber.SelectedIndex = Math.Max(0, Array.FindIndex(Transcribers, m => m.Value == s.Transcriber));
+        _azureEndpoint.Text = s.AzureEndpoint ?? "";
+        _azureKey.Text = s.AzureKey ?? "";
+        _azureTestResult.Text = "";
+        ShowTranscriberFields();
         _whisperModel.SelectedIndex = Math.Max(0, Array.FindIndex(WhisperModels, m => m.Value == s.WhisperModel));
-        _language.SelectedIndex = Math.Max(0, Array.FindIndex(Languages, m => m.Value == s.Language));
         _effort.SelectedIndex = Math.Max(0, Array.FindIndex(Efforts, m => m.Value == s.Effort));
         _maxFrames.Value = Math.Clamp(s.MaxFrames ?? 0, 0, 100);
+        _correctTranscript.Checked = s.CorrectTranscript;
         _resources.SelectedIndex = Math.Max(0, Array.IndexOf(ResourceLevels.All, s.Resources));
         _autoAnalyse.Checked = s.AutoAnalyse;
     }
@@ -754,15 +827,27 @@ sealed class MainForm : Form
                     BuildInfo.AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
         }
+        string? transcriber = Transcribers[_transcriber.SelectedIndex].Value;
+        string endpoint = _azureEndpoint.Text.Trim();
+        string key = _azureKey.Text.Trim();
+        if (transcriber == AppSettings.AzureTranscriber && AzureProblem(endpoint, key) is { } problem)
+        {
+            MessageBox.Show(this, problem, BuildInfo.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         var s = _host.Settings;
         bool foldersChanged = (s.ProjectsRoot ?? "") != projects || (s.OutputRoot ?? "") != output;
         s.ProjectsRoot = projects.Length > 0 ? projects : null;
         s.OutputRoot = output.Length > 0 ? output : null;
         s.ClaudeProfile = profile.Length > 0 ? profile : null;
+        s.Transcriber = transcriber;
+        // Kept when Local is chosen, so switching back to Azure doesn't need them again.
+        s.AzureEndpoint = endpoint.Length > 0 ? endpoint : null;
+        s.AzureKey = key;
         s.WhisperModel = WhisperModels[_whisperModel.SelectedIndex].Value;
-        s.Language = Languages[_language.SelectedIndex].Value;
         s.Effort = Efforts[_effort.SelectedIndex].Value;
         s.MaxFrames = _maxFrames.Value > 0 ? (int)_maxFrames.Value : null;
+        s.CorrectTranscript = _correctTranscript.Checked;
         s.Resources = ResourceLevels.All[_resources.SelectedIndex];
         if (_autoAnalyse.Checked != s.AutoAnalyse)
         {
@@ -771,6 +856,87 @@ sealed class MainForm : Form
         }
         _host.SaveSettings(foldersChanged);
         MessageBox.Show(this, "Saved.", BuildInfo.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void ShowTranscriberFields()
+    {
+        bool azure = _transcriber.SelectedIndex >= 0 && Transcribers[_transcriber.SelectedIndex].Value == AppSettings.AzureTranscriber;
+        _localRows.ForEach(c => c.Visible = !azure);
+        _azureRows.ForEach(c => c.Visible = azure);
+    }
+
+    /// <summary>Why the Azure fields can't be used as they are, or null.</summary>
+    private static string? AzureProblem(string endpoint, string key)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? uri) || uri.Scheme != Uri.UriSchemeHttps)
+            return "Enter the Azure endpoint, starting with https:// (the AI services endpoint on the resource's Keys and Endpoint page).";
+        if (key.Length == 0)
+            return "Enter the Azure key.";
+        return null;
+    }
+
+    /// <summary>Has the core transcribe two seconds of near-silence with the endpoint and key as entered (not yet saved).</summary>
+    private async Task TestAzureAsync(Button button)
+    {
+        string endpoint = _azureEndpoint.Text.Trim();
+        string key = _azureKey.Text.Trim();
+        if (AzureProblem(endpoint, key) is { } problem)
+        {
+            ShowTestResult(false, problem);
+            return;
+        }
+        CoreConfig? core = _host.LoadCore();
+        if (core == null)
+        {
+            ShowTestResult(false, "The analysis engine is not available. Run deploy.cmd to repair the install.");
+            return;
+        }
+        var info = core.Command(["check-transcription", "--transcriber", AppSettings.AzureTranscriber, "--azure-endpoint", endpoint]);
+        info.Environment[AppSettings.AzureKeyVariable] = key;
+        button.Enabled = false;
+        _azureTestResult.ForeColor = SystemColors.GrayText;
+        _azureTestResult.Text = "Testing…";
+        try
+        {
+            var (ok, output) = await Task.Run(() =>
+            {
+                using var process = Process.Start(info)!;
+                Task<string> stderr = process.StandardError.ReadToEndAsync();
+                string stdout = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit();
+                // A crash leaves nothing on stdout; the last line of the traceback says what went wrong.
+                string text = stdout.Length > 0 ? stdout : stderr.Result.Trim().Split('\n').Last().Trim();
+                return (process.ExitCode == 0, text);
+            });
+            ShowTestResult(ok, output.Length > 0 ? output : "The test failed without a reason.");
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            ShowTestResult(false, $"The analysis engine didn't start: {ex.Message}");
+        }
+        finally
+        {
+            button.Enabled = true;
+        }
+    }
+
+    /// <summary>Opens a file or web page with its default program.</summary>
+    private void OpenExternal(string target)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, $"Couldn't open {target}:\n{ex.Message}", BuildInfo.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ShowTestResult(bool ok, string text)
+    {
+        _azureTestResult.ForeColor = ok ? Color.ForestGreen : Color.Firebrick;
+        _azureTestResult.Text = (ok ? "✓ " : "✗ ") + text;
     }
 
     // ---- Templates ------------------------------------------------------------------------------------------------

@@ -5,10 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from media_analysis.engine.hardware import detect
 from media_analysis.engine.workflow import Stage
 from media_analysis.media import ffmpeg
-from media_analysis.providers.transcriber import SAMPLE_RATE, FasterWhisperTranscriber, split_points
+from media_analysis.providers.transcriber import SAMPLE_RATE, Transcriber, create_transcriber, split_points
 from media_analysis.understand.models import FileTranscript, Ingest, MediaFile, Transcript, TranscriptSegment, Word
 
 
@@ -29,8 +28,9 @@ class TranscribeStage(Stage):
             return Transcript(files=[silent.get(f.id) or _relabel(cached[f.id], f.id) for f in ingest.files])  # type: ignore[arg-type]
 
         self.need_work()
-        transcriber = FasterWhisperTranscriber(ts, detect())
-        rep.started(f"model {ts.model} on {transcriber.device} ({transcriber.compute_type})")
+        transcriber = create_transcriber(ts, ffmpeg.encode_flac)
+        self.note(transcriber=transcriber.description, transcriber_config=transcriber.config)
+        rep.started(transcriber.description)
         results: list[FileTranscript] = []
         total = sum(f.duration for f in audio) or 1.0
         done_before = 0.0
@@ -51,7 +51,7 @@ class TranscribeStage(Stage):
         return Transcript(files=results)
 
     def _transcribe_file(
-        self, f: MediaFile, file_key: str, transcriber: FasterWhisperTranscriber, done_before: float, total: float,
+        self, f: MediaFile, file_key: str, transcriber: Transcriber, done_before: float, total: float,
     ) -> FileTranscript:
         rep = self.rep
         rep.info(f"decoding audio: {f.name}")
@@ -73,8 +73,9 @@ class TranscribeStage(Stage):
                     TranscriptSegment(
                         start=start, end=end, text=text,
                         words=[Word(start=ws, end=we, text=w) for ws, we, w in words] if words is not None else None,
+                        language=lang,
                     )
-                    for start, end, text, words in segs
+                    for start, end, text, words, lang in segs
                 ])
                 self.cache.save(self.name, chunk_key, chunk)
             else:

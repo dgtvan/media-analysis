@@ -21,8 +21,8 @@ video and audio (the speech, what is on screen); a **workflow** then turns that 
            Recording Reports (apps/recording-reports)                  Core (core/src/media_analysis)
   ┌──────────────────────────────────────────┐   starts, per project   ┌────────────────────────────────┐
   │ TrayApp ── watches the projects folder   │ ──────────────────────► │ report <in> <out> --json       │
-  │ MainForm ─ projects grid, Config, ...    │                         │   └─ ReportWorkflow (9 stages) │
-  │ AnalysisRunner ─ queue, one run at a time│ ◄────────────────────── │        ├─ faster-whisper       │
+  │ MainForm ─ projects grid, Config, ...    │                         │   └─ ReportWorkflow (11 stages)│
+  │ AnalysisRunner ─ queue, one run at a time│ ◄────────────────────── │        ├─ Whisper / Azure      │
   │ RunHistory, logs, MediaDurations         │   JSON events (stdout)  │        ├─ ffmpeg / OpenCV      │
   └──────────────────────────────────────────┘                         │        └─ Claude (Agent SDK)   │
                                                                        └────────────────────────────────┘
@@ -35,7 +35,8 @@ How it is built, installed and updated is in [DEPLOYMENT.md](DEPLOYMENT.md).
 - One input folder is one session (typically one or two recordings of 10–60 minutes). Its files are analysed
   together; anything that isn't video or audio is skipped with a warning.
 - Speech in English, Vietnamese or both mixed. The transcript keeps the original language; the report is in English.
-- Uses an NVIDIA GPU for transcription when there is one, the CPU otherwise.
+- Transcribes on this computer (an NVIDIA GPU when there is one, the CPU otherwise) or, when chosen, with Azure AI Speech
+  fast transcription.
 - Runs are resumable: finished work is never repeated unless asked for.
 - Not covered: several folders combined into one report, audio/video clips as evidence (frames only), other input
   types (images, PDF, slides), speaker diarization beyond Meeting Recorder's microphone/system split.
@@ -46,7 +47,7 @@ How it is built, installed and updated is in [DEPLOYMENT.md](DEPLOYMENT.md).
 |---|---|
 | Core language | Python 3.12, managed with uv |
 | Media decoding | ffmpeg / ffprobe |
-| Transcription | faster-whisper (CTranslate2), `large-v3` by default |
+| Transcription | faster-whisper (CTranslate2), `large-v3` by default; or Azure AI Speech fast transcription (REST, standard library only) |
 | Image analysis | OpenCV (headless), NumPy, Pillow |
 | Claude | Claude Agent SDK (subscription login) or the Anthropic SDK (API key) |
 | CLI | Typer + Rich |
@@ -68,15 +69,16 @@ core/
       sinks.py          console and JSON event output
     engine/             runs any workflow; knows nothing about reports
       workflow.py       Workflow (stage order, --force, --fresh, cache, run record), Stage, RunContext
-      cache.py          content-addressed cache and file fingerprints
+      cache.py          content-addressed cache, file fingerprints, how each cached result was made
+      how_made.py       how-made.md: the settings and, per step, what ran, what was reused and what made it
       perf.py           StageTimer (timings, Claude calls and tokens), TimedLLM, summary, run statistics record
       events.py         progress events and the Reporter helper stages use to emit them
-      settings.py       settings (transcription, scan, evidence, Claude), data folder
+      settings.py       settings (transcription, scan, evidence, Claude), data folder, technical terms file
       errors.py         MediaAnalysisError (expected failures, with an exit code)
       hardware.py       CPU/GPU detection
       usage.py, timecode.py
     providers/
-      transcriber.py    faster-whisper wrapper, silence-aware chunking
+      transcriber.py    Transcriber interface: faster-whisper and Azure AI Speech; silence-aware chunking
       llm.py            Claude backends (subscription, api) behind one LLM interface
     media/              local media tools, no AI
       ffmpeg.py         probe, decode audio, iterate frames, extract stills, proxies, filmstrips, loudness
@@ -87,7 +89,8 @@ core/
       look.py           the "look" image of one time range (frames, waveform, words)
     understand/         what is in the files, the same for every workflow
       models.py         MediaFile, Ingest, Transcript, VisualScan, ShotList, Sound, Descriptions
-      ingest.py, transcribe.py, scan.py, condense.py   stages used by reports
+      ingest.py, transcribe.py, correct.py, scan.py, condense.py   stages used by reports
+      languages.py      share of speech per language, the note Claude gets about it
       shots.py, sound.py, describe.py                  stages for footage
       views.py          the compact text views Claude reads (transcript phrases, scan table, shot list)
       sessions.py       Meeting Recorder files and their speakers
@@ -118,11 +121,13 @@ object per line with `--json`), and the Windows app reads the JSON.
 ### 3.2 Report workflow
 
 ```
-1 ingest ─► 2 transcribe ─► 3 scan ─► 4 condense ─► 5 classify ─► 6 plan ─► 7 extract ─► 8 read ─► 9 report ─► 10 assemble
-  local       local          local      Claude*       Claude        Claude     local        Claude     Claude      local
+1 ingest ─► 2 transcribe ─► 3 correct ─► 4 scan ─► 5 condense ─► 6 classify ─► 7 plan ─► 8 extract ─► 9 read ─► 10 report ─► 11 assemble
+  local       local or      Claude†      local      Claude*       Claude        Claude     local        Claude     Claude       local
+              Azure
 ```
 
-\* only for transcripts too long for one call; otherwise skipped.
+\* only for transcripts too long for one call; otherwise skipped. † only with `--correct-transcript` (on by default in
+Recording Reports).
 
 Each stage takes the previous stages' results and returns its own typed result, which is cached (3.4). Stages that
 need video (scan, plan, extract, read) are skipped for audio-only sessions.
@@ -130,21 +135,62 @@ need video (scan, plan, extract, read) are skipped for audio-only sessions.
 | # | Stage | What it does | Result |
 |---|---|---|---|
 | 1 | ingest | Lists the folder's video/audio files in name order, probes them with ffprobe (duration, streams, size), fingerprints each file, labels Meeting Recorder audio (`audio-mic` = Me, `audio-system` = Others) | `Ingest` |
-| 2 | transcribe | Decodes 16 kHz mono audio with ffmpeg and transcribes it with faster-whisper, in ~10 minute chunks cut at the quietest moment nearby, each chunk cached so an interrupted run resumes mid-file | `Transcript` |
-| 3 | scan | Splits each video into visual segments (stretches whose content stays the same), with no AI | `VisualScan` |
-| 4 | condense | Builds the transcript view Claude reads (phrases, see below); if it is longer than `transcript_budget_chars` (300,000 by default), Claude condenses it part by part into timecoded notes | text |
-| 5 | classify | One Claude call picks the template that fits, from the transcript, the segment list and a contact sheet of up to 16 thumbnails | `Classification` |
-| 6 | plan | One Claude call decides which moments need a frame as evidence, guided by the template | `FramePlan` |
-| 7 | extract | Decodes each requested range densely, groups near-duplicate frames and keeps the sharpest distinct ones | `Candidates` |
-| 8 | read | Claude looks at the candidate frames in batches, drops irrelevant ones and reads their text verbatim | `Evidence` |
-| 9 | report | One Claude call writes the report in Markdown from the template, transcript and evidence | `ReportDraft` |
-| 10 | assemble | Writes `report.md` and copies only the frames and text the report references | output folder |
+| 2 | transcribe | Decodes 16 kHz mono audio with ffmpeg and transcribes it with faster-whisper or Azure AI Speech, in ~10 minute chunks cut at the quietest moment nearby, each chunk cached so an interrupted run resumes mid-file | `Transcript` |
+| 3 | correct | Claude fixes clearly misheard words (English terms and names in Vietnamese speech) using the whole meeting and the terms list; only with `--correct-transcript` | `CorrectedTranscript` |
+| 4 | scan | Splits each video into visual segments (stretches whose content stays the same), with no AI | `VisualScan` |
+| 5 | condense | Builds the transcript view Claude reads (phrases, see below); if it is longer than `transcript_budget_chars` (300,000 by default), Claude condenses it part by part into timecoded notes | text |
+| 6 | classify | One Claude call picks the template that fits, from the transcript, the segment list and a contact sheet of up to 16 thumbnails | `Classification` |
+| 7 | plan | One Claude call decides which moments need a frame as evidence, guided by the template | `FramePlan` |
+| 8 | extract | Decodes each requested range densely, groups near-duplicate frames and keeps the sharpest distinct ones | `Candidates` |
+| 9 | read | Claude looks at the candidate frames in batches, drops irrelevant ones and reads their text verbatim | `Evidence` |
+| 10 | report | One Claude call writes the report in Markdown from the template, transcript and evidence | `ReportDraft` |
+| 11 | assemble | Writes `report.md` and copies only the frames and text the report references | output folder |
 
 **Transcription.** faster-whisper runs with voice-activity detection. Without a language setting it re-detects the
 language every 30 seconds, so mixed English/Vietnamese speech works. Previous text isn't fed back into the model,
 which avoids repetition loops on long recordings. On a CUDA GPU it uses `float16`, otherwise `int8` on all CPU cores
 (on a 16-thread laptop CPU, large-v3 runs at about 0.8× real time, large-v3-turbo about 1.3×). Only NVIDIA GPUs are
 used; others fall back to the CPU.
+
+**Transcription engines.** The stage only knows the `Transcriber` interface (one chunk of 16 kHz audio in, its language
+and segments out), so engines can be swapped; `--transcriber` chooses one:
+
+- `local` (default): faster-whisper as above.
+- `azure-speech`: Azure AI Speech fast transcription (`/speechtotext/transcriptions:transcribe`, api-version
+  2025-10-15) at `--azure-endpoint`, the resource endpoint. Each ~10 minute chunk is encoded as FLAC and sent as one
+  request; phrases come back with word times and are kept as segments. The language is the `--language` setting
+  (`vi` → vi-VN, `en` → en-US). Without one, each ~2 minute piece is transcribed in both English and Vietnamese
+  (4 requests at a time). The language that wins most of the chunk is its main language, and a piece keeps it unless
+  the other is more confident there by over 0.1, so a short or quiet piece doesn't flip to the wrong language. Azure's
+  own language detection wasn't used: it picked English for a mostly Vietnamese meeting, and refuses chunks with
+  much of both ("Multiple languages were identified"). A chunk without speech counts as empty. Fillers ("ờ", "ừ", "um") are kept; the profanity filter is off.
+  Technical terms from `transcription-terms.txt` in the data folder (one per line, `#` comments) go as the phrase
+  list, at most 500; in tests they helped English speech, while the Vietnamese model ignored them. The key comes
+  only from the `MEDIA_ANALYSIS_AZURE_KEY` environment variable, so it never appears in command lines, logs or run
+  records. Rate limits (429) and server errors are retried, honouring `Retry-After`; a firewall refusal says how to
+  allow this computer (the portal's *Add your client IP address*, since a what's-my-IP site can see another
+  address than Azure does).
+
+**Correcting the transcript** (`understand/correct.py`, `--correct-transcript`; a Config checkbox, on by default in
+Recording Reports).
+Between transcription and the rest, Claude reads the whole transcript as numbered lines in time order (with
+speakers), plus the language mix and the technical terms list, and returns only the lines it changed: words clearly
+misheard, mostly English terms and names inside Vietnamese speech. Lines keep their language, wording and fillers;
+changed lines lose their word times. The corrected transcript is what the later stages read; the original stays in
+the cache, and `transcript-corrections.md` lists every change. On a 12-minute Vietnamese stand-up it corrected 11
+of 37 lines in 22 s (one call, about $0.09 at API rates).
+
+**Languages of the speech.** Every segment keeps its language when the engine gives one (Azure per phrase, local
+Whisper per chunk); `understand/languages.py` adds up the speech per language. The report's transcript view starts
+with a note when the speech isn't all English, e.g. "Speech: Vietnamese 85%, English 15% (detected) … English
+technical terms and names inside Vietnamese speech are often misheard, so work out what was meant from the
+context." The shares go into the `finished` event (the app's Language column), how-made.md and the run statistics.
+The app has no language setting: it always detects.
+
+The cache key of a local transcript is the same as before engines could be chosen; an Azure transcript's key has the
+engine, language, chunk length and a hash of the terms, so changing the resource doesn't transcribe again, while
+switching engines or editing the terms does. `check-transcription` transcribes two seconds of near-silence to test the settings (the
+apps' *Test connection*).
 
 **What Claude reads of the transcript.** Speech is shown as phrases rather than raw recognition segments: consecutive
 segments of one speaker are joined while the gaps stay under a second and the phrase under 30 seconds, and each line
@@ -229,6 +275,12 @@ the stages after classification.
 - `--fresh` (*Analyse from scratch* in the app) deletes the cache first, so everything runs again.
 - `--clean-cache` deletes the cache after a successful run.
 
+Next to every cached result, `<key>.made-with.json` records how it was made: when, the core version, what the stage
+noted (the transcriber's description and settings) and the Claude models that answered with the backend and effort.
+Stages see the cache through `RecordingCache`, which writes these files when saving and, when a result is reused,
+tells the timer how it was made, so a run's records describe reused results by what really made them rather than
+by the current settings.
+
 ### 3.5 Events, logs and statistics
 
 Stages emit events through a `Reporter`: `stage_started`, `progress` (completed/total), `activity` (live status of a
@@ -241,14 +293,22 @@ time and tokens. At the end of every run, also a failed one, it emits the perfor
 transcription speed, and Claude calls, time and tokens in total and per stage.
 
 Every finished or failed run also appends one JSON object to `<data folder>/stats/runs.jsonl`: project and paths,
-the input files with their fingerprints, template, settings, total time, Claude usage, and the per-stage records. The
-fields are listed in the README.
+the input files with their fingerprints, template, settings, total time, Claude usage and models, and the per-stage
+records including what made each stage's results. The fields are listed in the README.
+
+Each finished run also writes `how-made.md` next to its result (`engine/how_made.py`): the run's date and length,
+the resource use the app reported (`--resource-use`), the Claude login, model and effort, workflow lines (template
+and key moments, or profile and length limit), and a table of steps with what this run did (ran, reused, skipped)
+and what made each result (transcriber, Claude model, or this computer; for reused results, when). It is kept apart
+from the report so the report can be shared without these details.
 
 ### 3.6 Output folder
 
 ```
 <output>/
   report.md                        the report, with relative links into reference/
+  how-made.md                      how the report was made (section 3.5)
+  transcript-corrections.md        only with --correct-transcript: the lines Claude corrected
   reference/
     frames/<file>_<hh-mm-ss>.jpg   only the frames the report uses
     text/<name>.md                 the text read from each of those frames
@@ -309,13 +369,17 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
   makes it waiting again. The folder is rescanned when it changes and every 30 seconds.
 - **Running the core.** `core.json`, written by the build next to the exe, says which Python to run, where the core's
   code is and which environment variables to set (ffmpeg and model folders). For each analysis the app runs
-  `python -m media_analysis report <project> <output> --json` with the options from Config, the Claude profile, the log
-  path and the project's name. One analysis runs at a time; the rest wait in a queue.
+  `python -m media_analysis report <project> <output> --json` with the options from Config (transcription engine and
+  endpoint, Whisper model, Claude profile and effort, key moments, transcript correction), the log path, the
+  project's name and the resource level at the start (`--resource-use`, for how-made.md). The Azure key goes in the
+  environment, never on the command line. The `finished` event's language shares are kept in `history.json` for the
+  grid's Language column. One analysis runs at a time; the rest wait in a queue.
 - **Resource use.** The core runs in a Windows job object, so its CPU cap and priority also cover the processes it
   starts (ffmpeg, Claude Code). Config sets the level for all analyses (Light 25% of the CPU at idle priority (default),
   Balanced 50% below normal, Fast 75% below normal, Full no limit at normal priority); a running or queued
   project can get its own level from its right-click menu. Changes apply to a running analysis at once and are
-  written to its log; a queued project raised above the Config level moves to the front. A project's own level is
+  written to its log. The limit matters for local work such as Local Whisper; with Azure transcription the core
+  mostly waits on the network; a queued project raised above the Config level moves to the front. A project's own level is
   kept in `pending.json`, so it survives a restart, and is dropped when the analysis ends. Only the CPU is limited.
 - **Logs and history.** Each analysis gets a log in `<data folder>\logs`: a header (project, options, Claude profile),
   then every event line from the core, so the performance summary ends it. The window shows a readable view of it,
@@ -391,7 +455,7 @@ local      local (words,   local    local    Claude      local      Claude
   understanding.json      what the last finished analysis found (footage, transcript, shots, descriptions, the
                           view Claude reads), so the project opens and chats without re-running any stage
   chat/history.jsonl, memory.md, activity.jsonl   the conversation, lasting preferences, and analysis steps
-  export/edit.json, edit.md
+  export/edit.json, edit.md, how-made.md
 ```
 
 ## 6. Testing

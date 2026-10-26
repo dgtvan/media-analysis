@@ -118,6 +118,9 @@ sealed class TrayApp : ApplicationContext, IAppHost
             _coreProblemReported = error;
             AddProblem(error);
         }
+        if (core != null)
+            foreach (var (name, value) in _settings.CoreEnvironment())
+                core.Environment[name] = value;
         return core;
     }
 

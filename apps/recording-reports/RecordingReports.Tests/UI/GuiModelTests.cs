@@ -18,6 +18,17 @@ public sealed class GuiModelTests : IDisposable
     }
 
     [Fact]
+    public void Language_column_names_the_main_languages_and_the_tooltip_their_shares()
+    {
+        var e = CoreEvent.Parse("""{"event": "finished", "languages": {"vi": 0.78, "en": 0.21, "fi": 0.01}}""")!;
+        var result = new RunResult(RunOutcome.Succeeded, "", "x.log", DateTime.Now, DateTime.Now, Languages: e.Languages);
+        Assert.Equal("Vietnamese + English", result.LanguageLabel);
+        Assert.Equal("Vietnamese 78%, English 21%", result.LanguageShares);
+        Assert.Equal("Vietnamese", RunStatus.DescribeLanguages(new Dictionary<string, double> { ["vi"] = 0.9, ["en"] = 0.1 }));
+        Assert.Equal("", new RunResult(RunOutcome.Succeeded, "", "", DateTime.Now, DateTime.Now).LanguageLabel);
+    }
+
+    [Fact]
     public void Elapsed_is_hours_minutes_seconds()
     {
         Assert.Equal("0:04:05", RunStatus.FormatElapsed(TimeSpan.FromSeconds(245)));
@@ -53,10 +64,30 @@ public sealed class GuiModelTests : IDisposable
     [Fact]
     public void Settings_become_core_options()
     {
-        Assert.Equal(["--claude-profile", AppSettings.DefaultClaudeProfile], new AppSettings().CoreArguments());
-        var s = new AppSettings { WhisperModel = "large-v3-turbo", Language = "vi", Effort = "low", MaxFrames = 10, ClaudeProfile = @"C:\p" };
-        Assert.Equal(["--whisper-model", "large-v3-turbo", "--language", "vi", "--effort", "low", "--claude-profile", @"C:\p", "--max-frames", "10"],
+        Assert.Equal(["--claude-profile", AppSettings.DefaultClaudeProfile, "--correct-transcript"], new AppSettings().CoreArguments());
+        Assert.Equal(["--claude-profile", AppSettings.DefaultClaudeProfile], new AppSettings { CorrectTranscript = false }.CoreArguments());
+        var s = new AppSettings { WhisperModel = "large-v3-turbo", Effort = "low", CorrectTranscript = true, MaxFrames = 10, ClaudeProfile = @"C:\p" };
+        Assert.Equal(["--whisper-model", "large-v3-turbo", "--effort", "low", "--claude-profile", @"C:\p", "--correct-transcript", "--max-frames", "10"],
             s.CoreArguments());
+    }
+
+    [Fact]
+    public void Azure_transcription_passes_the_endpoint_and_the_key_only_in_the_environment()
+    {
+        var s = new AppSettings
+        {
+            Transcriber = AppSettings.AzureTranscriber, AzureEndpoint = "https://r.cognitiveservices.azure.com/", WhisperModel = "small", ClaudeProfile = @"C:\p",
+            AzureKey = " secret ",
+        };
+        Assert.Equal(["--transcriber", "azure-speech", "--azure-endpoint", "https://r.cognitiveservices.azure.com/", "--claude-profile", @"C:\p", "--correct-transcript"], s.CoreArguments());
+        Assert.Equal("secret", s.CoreEnvironment()[AppSettings.AzureKeyVariable]);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(s));
+
+        s.Transcriber = null;
+        Assert.Empty(s.CoreEnvironment());
+        Assert.Equal("secret", s.AzureKey);
+        s.AzureKey = "";
+        Assert.Null(s.AzureKeyProtected);
     }
 
     [Fact]

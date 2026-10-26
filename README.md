@@ -19,6 +19,8 @@ embeds those frames as evidence.
 ```
 <output>/
   report.md                        # the report, built from the matching template
+  how-made.md                      # how it was made: transcription engine, Claude model, settings, reused steps
+  transcript-corrections.md        # only with --correct-transcript: each line Claude corrected, before and after
   reference/
     frames/<file>_<hh-mm-ss>.jpg   # only the frames the report uses
     text/<file>_<hh-mm-ss>.md      # text read from each of those frames
@@ -27,8 +29,10 @@ embeds those frames as evidence.
 
 ## How it works
 
-1. **Transcribe** locally with faster-whisper (English, Vietnamese or mixed). Uses an NVIDIA/CUDA GPU when present,
-   otherwise the CPU.
+1. **Transcribe** locally with faster-whisper (English, Vietnamese or mixed), or in the cloud with Azure AI Speech.
+   Locally it uses an NVIDIA/CUDA GPU when present, otherwise the CPU. The language is always detected.
+   Optionally (on by default in the app) Claude then **corrects** clearly misheard words, such as English terms in
+   Vietnamese speech.
 2. **Scan** the video locally (no AI): split it into stretches where the picture stays the same, ignoring noise,
    compression artifacts and regions that keep changing (clocks, webcam tiles, people moving).
 3. **Classify** with Claude: pick the template that fits, or stop with a reason when none does.
@@ -66,12 +70,13 @@ subfolder is a project (one recording session). Each project's report goes to `<
   *Done*, *Failed: …*, *Stopped by you*, *Not analysed*, *Ignored*), the elapsed time (the total processing time of
   the project's analysis, live while running: time spent in stopped, failed or interrupted runs is added when the
   analysis continues, and starts again from zero for *Analyse again* after a finished analysis or *Analyse from
-  scratch*), when it was last analysed, the recording length (total of the videos, or of the audio when there is no
+  scratch*), when it was last analysed, the languages of the speech (*Vietnamese*, *Vietnamese + English*; the
+  shares are in its tooltip; filled in by analyses from 2026-10-26 on), the recording length (total of the videos, or of the audio when there is no
   video; Meeting Recorder's microphone and system audio count once), and the number of media files. Lengths are kept in
   `durations.json` in the data folder, so a file is only measured again when it changes. Right-click a project for its
   actions (*Analyse* / *Analyse again*, *Analyse from scratch...* (clears everything kept from earlier runs and redoes
   every step), *Stop analysis* or *Remove from queue*, *Ignore* / *Unignore*), then what to
-  open (*View logs*, *Open report*, *Open project folder*, *Open output folder*) and, after a general report, *Add the
+  open (*View logs*, *Open report*, *How it was made*, *Open project folder*, *Open output folder*) and, after a general report, *Add the
   suggested template*; last, *Delete project...*, which moves the project folder (and, unless you untick it, its
   output folder) to the Recycle Bin. Select several projects (Ctrl/Shift-click) to delete them together from the
   right-click menu or with the Delete key. Double-click opens the report, if there is one. One analysis runs at a time; others
@@ -85,9 +90,10 @@ subfolder is a project (one recording session). Each project's report goes to `<
 - **Run statistics**: every analysis that finishes or fails appends one JSON line to
   `%LOCALAPPDATA%\VanDang\RecordingReports\data\stats\runs.jsonl` (see [Run statistics](#run-statistics)). An analysis
   you stop isn't recorded.
-- **Config tab**: projects and output folders, *Analyse new projects automatically*, transcription model, spoken
-  language, Claude profile (which Claude Code login and subscription analyses use; logged in each analysis), Claude
-  thinking effort and the maximum number of key moments (stored in `%LOCALAPPDATA%\VanDang\RecordingReports\data\settings.json`).
+- **Config tab**: projects and output folders, *Analyse new projects automatically*, the transcription engine (Local
+  Whisper with its model, or Azure AI Speech with its endpoint, key, *Test connection*, firewall help and a
+  technical terms list; the key is stored encrypted for your Windows account), Claude profile (which Claude Code login and subscription analyses use; logged in each analysis), Claude
+  thinking effort, the maximum number of key moments and *Correct misheard words in the transcript first* (stored in `%LOCALAPPDATA%\VanDang\RecordingReports\data\settings.json`).
 - **Templates tab**: built-in and your own templates (`%LOCALAPPDATA%\VanDang\RecordingReports\data\templates`), with *New*, *Open* and
   *Copy to my templates*.
 - **Automatic analysis** (off by default): projects added after you turn it on are queued once their files have
@@ -136,8 +142,8 @@ not an editor: the timeline shows what was kept and what was cut, and every chan
   effects are placeholders for now.
 - **Export**: `edit.json` (sources, tracks and items in seconds, with the reason and words of each clip) to rebuild
   the edit in another editor. CapCut export is planned.
-- **Settings** (on the projects screen): which Claude Code login to use. On the first start it takes Recording
-  Reports' choice.
+- **Settings** (on the projects screen): which Claude Code login to use (on the first start it takes Recording
+  Reports' choice) and the transcription engine (Local Whisper, or Azure AI Speech with its endpoint, key and terms list).
 
 Projects are in `%LOCALAPPDATA%\VanDang\FootageEditor\data\projects`. From the command line:
 
@@ -179,8 +185,11 @@ Useful options:
 | `--template <id>` | Skip detection and use this template |
 | `--force <stage>` | Redo a stage and everything after it (`transcribe`, `scan`, `classify`, `plan`, `extract`, `read`, `report`) |
 | `--whisper-model <name>` | e.g. `large-v3-turbo` (faster on CPU, a bit less accurate) |
-| `--language en\|vi` | Language hint; by default it is detected and mixed speech is allowed |
+| `--transcriber local\|azure-speech` | Transcribe on this computer (default) or with Azure AI Speech fast transcription; the key goes in the `MEDIA_ANALYSIS_AZURE_KEY` environment variable, technical terms in `transcription-terms.txt` in the data folder |
+| `--azure-endpoint <url>` | The resource's AI services endpoint, e.g. `https://<name>.services.ai.azure.com/` (`<name>.cognitiveservices.azure.com` works too; the regional `stt.speech.microsoft.com` one doesn't). `media-analysis check-transcription` tests it |
+| `--language en\|vi` | Force one language; by default it is detected and mixed speech is allowed (the app always detects) |
 | `--max-frames <n>` | Maximum moments to capture (default 30) |
+| `--correct-transcript` | Have Claude fix clearly misheard words in the transcript before the report (listed in `transcript-corrections.md`) |
 | `--claude-model <id>` | Claude model (default: your account's default model, as in Claude Code) |
 | `--effort <level>` | Claude thinking effort: `low`, `medium`, `high`, `xhigh`, `max` (default: the model's default) |
 | `--claude-profile <dir>` | Claude Code config folder whose login to use, e.g. `~/.claude-work` (default: Claude Code's default, `~/.claude`) |
@@ -227,10 +236,10 @@ Each run appends one JSON object per line to `<data folder>/stats/runs.jsonl` (t
 | `media` | `files` (name, `fingerprint`, seconds, has_video, has_audio, speaker), `video_seconds`, `audio_seconds`. The fingerprint (size + first and last 8 MB) identifies a file even after it is moved or renamed |
 | `template` | `id`, `generic`, `forced`, `confidence` (null when the run failed before classifying) |
 | `evidence_count` | Moments captured (null on failure) |
-| `settings` | backend, model, effort, claude_profile, whisper_model, device, language, max_frames |
+| `settings` | backend, model, effort, claude_profile, transcriber (`local` or `azure-speech`), whisper_model and device (local only), language, resource_use (as the app describes it at the start), max_frames |
 | `total_seconds`, `transcribe_speed` | Run time; audio seconds per second of transcription |
-| `claude` | `calls`, `seconds`, `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `cost_usd` |
-| `stages` | Per stage: `stage`, `result` (ran/cached/skipped/failed), `seconds`, `message`, `claude_calls`, `claude_usage` |
+| `claude` | `calls`, `seconds`, `models` (the models that answered), `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `cost_usd` |
+| `stages` | Per stage: `stage`, `result` (ran/cached/skipped/failed), `seconds`, `message`, `claude_calls`, `claude_usage`, `made_with` (what did its work in this run, e.g. the transcriber and its settings, the Claude models), `reused` (how results taken from the cache were made, and when) |
 
 ```python
 import os

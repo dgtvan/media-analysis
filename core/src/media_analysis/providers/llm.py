@@ -122,6 +122,7 @@ class SubscriptionLLM:
         self.effort = effort
         self.profile = profile
         self.last_usage: Usage | None = None
+        self.last_model: str | None = None
         # An API key in the environment would take precedence over the login and bill the API silently.
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
@@ -171,8 +172,10 @@ class SubscriptionLLM:
             async for message in query(prompt=prompt(), options=options):
                 if isinstance(message, StreamEvent):
                     tracker.event(message.event)
-                elif isinstance(message, SystemMessage) and message.subtype == "init" and on_activity:
-                    on_activity(f"model {message.data.get('model', '?')}")
+                elif isinstance(message, SystemMessage) and message.subtype == "init":
+                    self.last_model = message.data.get("model") or self.last_model
+                    if on_activity:
+                        on_activity(f"model {message.data.get('model', '?')}")
                 elif isinstance(message, ResultMessage):
                     result = message
         except ClaudeSDKError as e:

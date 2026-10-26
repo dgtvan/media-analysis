@@ -16,6 +16,7 @@ sealed class ActiveRun(string projectPath, string name, string logPath, TimeSpan
     public string? Activity { get; set; }
     public string? FinalMessage { get; set; }
     public bool GenericReport { get; set; }
+    public Dictionary<string, double>? Languages { get; set; }
     public bool Cancelled { get; set; }
     public bool Fresh { get; init; }
 
@@ -315,7 +316,8 @@ sealed class AnalysisRunner : IDisposable
             }
 
             // Recorded in the run statistics, so a record leads back to this log and the name shown in the app.
-            List<string> runOptions = [.. options, "--log-file", logPath, "--project-name", _displayName(path)];
+            List<string> runOptions = [.. options, "--log-file", logPath, "--project-name", _displayName(path),
+                "--resource-use", run.Level.Describe() + (levelOverride != null ? ", chosen for this project" : "")];
             var process = new Process { StartInfo = core.RunCommand(path, output, runOptions), EnableRaisingEvents = true };
             var stderr = new List<string>();
             process.OutputDataReceived += (_, e) => OnOutput(run, log, e.Data);
@@ -389,6 +391,7 @@ sealed class AnalysisRunner : IDisposable
         {
             case "finished":
                 run.GenericReport = e.Generic;
+                run.Languages = e.Languages;
                 return;
             case "error":
                 run.FinalMessage = e.Message;
@@ -436,8 +439,9 @@ sealed class AnalysisRunner : IDisposable
     private void Complete(ActiveRun run, RunOutcome outcome, string message)
     {
         var finished = DateTime.Now;
+        // A failed or stopped run keeps showing the languages the last finished one found.
         var result = new RunResult(outcome, message, run.LogPath, run.StartedAt, finished, run.GenericReport,
-            run.Before + (finished - run.StartedAt));
+            run.Before + (finished - run.StartedAt), run.Languages ?? _history.Get(run.ProjectPath)?.Languages);
         Current = null;
         _history.Set(run.ProjectPath, result);
         SavePending();

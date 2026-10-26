@@ -34,6 +34,8 @@ def report(
     force: Annotated[Optional[str], typer.Option(help=f"Redo this stage and all later ones: {', '.join(STAGES[1:])}.")] = None,
     clean_cache: Annotated[bool, typer.Option(help="Delete the working cache after a successful run.")] = False,
     fresh: Annotated[bool, typer.Option(help="Delete the working cache of earlier runs first and redo every stage.")] = False,
+    transcriber: Annotated[Optional[str], typer.Option(help="Transcription engine: local (faster-whisper, default) or azure-speech (Azure AI Speech; key in MEDIA_ANALYSIS_AZURE_KEY).")] = None,
+    azure_endpoint: Annotated[Optional[str], typer.Option(help="Azure resource endpoint, e.g. https://<name>.services.ai.azure.com/ (the AI services endpoint).")] = None,
     whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model, e.g. large-v3, large-v3-turbo, medium.")] = None,
     device: Annotated[Optional[str], typer.Option(help="Transcription device: auto, cpu or cuda.")] = None,
     language: Annotated[Optional[str], typer.Option(help="Spoken language hint (en, vi). Default: detect, mixed allowed.")] = None,
@@ -42,7 +44,9 @@ def report(
     effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort: low, medium, high, xhigh, max. Default: the model's default.")] = None,
     claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use, e.g. ~/.claude-work. Default: Claude Code's default.")] = None,
     max_frames: Annotated[Optional[int], typer.Option(help="Maximum number of moments to capture as evidence.")] = None,
+    correct_transcript: Annotated[bool, typer.Option(help="Have Claude fix clearly misheard words in the transcript first.")] = False,
     templates_dir: Annotated[Optional[list[Path]], typer.Option(help="Extra folder(s) with user templates.")] = None,
+    resource_use: Annotated[Optional[str], typer.Option(help="How much of the computer the caller lets this run use, as text for the records.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print progress as JSON Lines on stdout instead of the console view.")] = False,
     project_name: Annotated[Optional[str], typer.Option(help="Name of the project to record in the run statistics. Default: the folder name.")] = None,
     log_file: Annotated[Optional[Path], typer.Option(help="Log file of this run, to record in the run statistics.")] = None,
@@ -52,14 +56,12 @@ def report(
     if force and force not in STAGES[1:]:
         raise typer.BadParameter(f"must be one of: {', '.join(STAGES[1:])}", param_hint="--force")
     settings = Settings()
-    if whisper_model:
-        settings.transcription.model = whisper_model
+    _transcription(settings, transcriber, azure_endpoint, whisper_model, language)
+    settings.resource_use = resource_use
     if device:
         if device not in ("auto", "cpu", "cuda"):
             raise typer.BadParameter("must be auto, cpu or cuda", param_hint="--device")
         settings.transcription.device = device  # type: ignore[assignment]
-    if language:
-        settings.transcription.language = language
     if backend:
         if backend not in ("subscription", "api"):
             raise typer.BadParameter("must be subscription or api", param_hint="--backend")
@@ -74,6 +76,7 @@ def report(
         settings.llm.claude_profile = claude_profile
     if max_frames is not None:
         settings.evidence.max_requests = max_frames
+    settings.correct_transcript = correct_transcript
     if templates_dir:
         settings.templates_dirs = [*templates_dir, *settings.templates_dirs]
 
@@ -104,7 +107,7 @@ def report(
         sink.emit({
             "event": "finished", "report": str(result.report_path), "template": c.template_id,
             "generic": c.fallback, "confidence": c.confidence, "reason": c.reason,
-            "evidence_frames": result.evidence_count,
+            "evidence_frames": result.evidence_count, "languages": result.languages,
         })
         return
     console.print(f"\n[bold green]Done.[/] Report: {result.report_path}")
@@ -135,6 +138,20 @@ def _claude(settings: Settings, backend: str | None, claude_model: str | None, e
         settings.llm.claude_profile = claude_profile
 
 
+def _transcription(settings: Settings, transcriber: str | None, azure_endpoint: str | None, whisper_model: str | None,
+                   language: str | None) -> None:
+    if transcriber:
+        if transcriber not in ("local", "azure-speech"):
+            raise typer.BadParameter("must be local or azure-speech", param_hint="--transcriber")
+        settings.transcription.engine = transcriber  # type: ignore[assignment]
+    if azure_endpoint:
+        settings.transcription.azure_endpoint = azure_endpoint
+    if whisper_model:
+        settings.transcription.model = whisper_model
+    if language:
+        settings.transcription.language = language
+
+
 def _fail(sink: ConsoleSink | JsonSink, e: Exception) -> typer.Exit:
     sink.close()
     if isinstance(e, MediaAnalysisError):
@@ -157,12 +174,15 @@ def edit(
     max_minutes: Annotated[Optional[float], typer.Option(help="Longest the proposed edit may be, in minutes, e.g. 1.5 (overrides the profile's limit).")] = None,
     force: Annotated[Optional[str], typer.Option(help="Redo this stage and all later ones.")] = None,
     fresh: Annotated[bool, typer.Option(help="Delete the cache of earlier runs first.")] = False,
+    transcriber: Annotated[Optional[str], typer.Option(help="Transcription engine: local (faster-whisper, default) or azure-speech (Azure AI Speech; key in MEDIA_ANALYSIS_AZURE_KEY).")] = None,
+    azure_endpoint: Annotated[Optional[str], typer.Option(help="Azure resource endpoint, e.g. https://<name>.services.ai.azure.com/ (the AI services endpoint).")] = None,
     whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model.")] = None,
     language: Annotated[Optional[str], typer.Option(help="Spoken language hint (en, vi).")] = None,
     backend: Annotated[Optional[str], typer.Option(help="Claude access: subscription (default) or api.")] = None,
     claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
     effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
     claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+    resource_use: Annotated[Optional[str], typer.Option(help="How much of the computer the caller lets this run use, as text for the records.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print progress as JSON Lines.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
@@ -172,10 +192,8 @@ def edit(
     if force and force not in EditWorkflow.stage_names()[1:]:
         raise typer.BadParameter(f"must be one of: {', '.join(EditWorkflow.stage_names()[1:])}", param_hint="--force")
     settings = Settings()
-    if whisper_model:
-        settings.transcription.model = whisper_model
-    if language:
-        settings.transcription.language = language
+    _transcription(settings, transcriber, azure_endpoint, whisper_model, language)
+    settings.resource_use = resource_use
     _claude(settings, backend, claude_model, effort, claude_profile)
     sink: ConsoleSink | JsonSink = JsonSink() if json_output else ConsoleSink(console, verbose)
     try:
@@ -205,18 +223,19 @@ def edit_project(
     claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
     effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
     claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+    transcriber: Annotated[Optional[str], typer.Option(help="Transcription engine: local (faster-whisper, default) or azure-speech (Azure AI Speech; key in MEDIA_ANALYSIS_AZURE_KEY).")] = None,
+    azure_endpoint: Annotated[Optional[str], typer.Option(help="Azure resource endpoint, e.g. https://<name>.services.ai.azure.com/ (the AI services endpoint).")] = None,
     whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model.")] = None,
     language: Annotated[Optional[str], typer.Option(help="Spoken language hint (en, vi).")] = None,
+    resource_use: Annotated[Optional[str], typer.Option(help="How much of the computer the caller lets this run use, as text for the records.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print progress as JSON Lines.")] = False,
 ) -> None:
     """Analyse a project's imported footage with its profile and limit, and propose an edit."""
     from media_analysis.workflows.edit.workflow import EditOptions, EditWorkflow, load_project_info
 
     settings = Settings()
-    if whisper_model:
-        settings.transcription.model = whisper_model
-    if language:
-        settings.transcription.language = language
+    _transcription(settings, transcriber, azure_endpoint, whisper_model, language)
+    settings.resource_use = resource_use
     _claude(settings, backend, claude_model, effort, claude_profile)
     sink: ConsoleSink | JsonSink = JsonSink() if json_output else ConsoleSink(console, False)
     try:
@@ -245,6 +264,8 @@ def serve(
     claude_model: Annotated[Optional[str], typer.Option(help="Claude model id.")] = None,
     effort: Annotated[Optional[str], typer.Option(help="Claude thinking effort.")] = None,
     claude_profile: Annotated[Optional[Path], typer.Option(help="Claude Code config folder whose login to use.")] = None,
+    transcriber: Annotated[Optional[str], typer.Option(help="Transcription engine for analyses: local (default) or azure-speech.")] = None,
+    azure_endpoint: Annotated[Optional[str], typer.Option(help="Azure resource endpoint, e.g. https://<name>.services.ai.azure.com/ (the AI services endpoint).")] = None,
 ) -> None:
     """Run the Footage Editor's local service (Project API + the presentation) until stopped."""
     import secrets as _secrets
@@ -257,12 +278,14 @@ def serve(
     def settings_factory() -> Settings:
         s = Settings()
         _claude(s, backend, claude_model, effort, claude_profile)
+        _transcription(s, transcriber, azure_endpoint, None, None)
         return s
 
     settings_factory()  # checks the options once, up front
     cli_args: list[str] = []
     for name, value in (("--backend", backend), ("--claude-model", claude_model), ("--effort", effort),
-                        ("--claude-profile", claude_profile)):
+                        ("--claude-profile", claude_profile), ("--transcriber", transcriber),
+                        ("--azure-endpoint", azure_endpoint)):
         if value:
             cli_args += [name, str(value)]
     token = token or _secrets.token_urlsafe(24)
@@ -368,6 +391,26 @@ def doctor(
             ok = False
             console.print(f"Claude: [red]{e}[/]")
     raise typer.Exit(0 if ok else 1)
+
+
+@app.command("check-transcription")
+def check_transcription(
+    transcriber: Annotated[Optional[str], typer.Option(help="Transcription engine: local or azure-speech.")] = None,
+    azure_endpoint: Annotated[Optional[str], typer.Option(help="Azure resource endpoint, e.g. https://<name>.services.ai.azure.com/ (the AI services endpoint).")] = None,
+    whisper_model: Annotated[Optional[str], typer.Option(help="faster-whisper model.")] = None,
+) -> None:
+    """Transcribe two seconds of near-silence to confirm the transcription engine works (Azure: endpoint, key, firewall)."""
+    from media_analysis.media import ffmpeg
+    from media_analysis.providers.transcriber import check_transcriber
+
+    settings = Settings()
+    _transcription(settings, transcriber, azure_endpoint, whisper_model, None)
+    try:
+        used = check_transcriber(settings.transcription, ffmpeg.encode_flac)
+    except MediaAnalysisError as e:
+        typer.echo(str(e))
+        raise typer.Exit(1) from None
+    typer.echo(f"Works: {used}.")
 
 
 @templates_app.command("list")

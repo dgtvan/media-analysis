@@ -10,7 +10,7 @@ from media_analysis.workflows.report.workflow import ReportOptions, ReportWorkfl
 
 def test_stages_run_in_the_documented_order():
     assert ReportWorkflow.stage_names() == [
-        "ingest", "transcribe", "scan", "condense", "classify", "plan", "extract", "read", "report", "assemble",
+        "ingest", "transcribe", "correct", "scan", "condense", "classify", "plan", "extract", "read", "report", "assemble",
     ]
 
 

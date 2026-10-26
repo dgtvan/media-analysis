@@ -48,12 +48,22 @@ class TranscriptSegment(BaseModel):
     text: str
     words: list[Word] | None = None
     """Per-word times, only when word timestamps were asked for."""
+    language: str | None = None
+    """ISO code of the segment's language when the engine gives one per segment or chunk (None in older caches)."""
 
 
 class FileTranscript(BaseModel):
     file_id: str
     language: str | None
     segments: list[TranscriptSegment]
+
+    def speech_by_language(self) -> dict[str, float]:
+        """Seconds of speech per language; segments without their own language count as the file's."""
+        seconds: dict[str, float] = {}
+        for s in self.segments:
+            if lang := s.language or self.language:
+                seconds[lang] = seconds.get(lang, 0.0) + max(0.0, s.end - s.start)
+        return seconds
 
 
 class Transcript(BaseModel):

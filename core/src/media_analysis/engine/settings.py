@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -22,7 +23,30 @@ USER_TEMPLATES_DIR = USER_HOME / "templates"
 USER_MODELS_DIR = USER_HOME / "models" if sys.platform == "win32" else None
 """Where a model goes when the shared folder can't take it (None = Hugging Face's default cache)."""
 
+AZURE_KEY_ENV = "MEDIA_ANALYSIS_AZURE_KEY"
+"""Environment variable holding the Azure AI Speech key. Kept out of the settings so it never reaches logs or run records."""
+TERMS_FILE_NAME = "transcription-terms.txt"
+
+
+def read_terms(path: Path | None) -> list[str]:
+    """Terms from a text file: one per line; blank lines and lines starting with # are skipped. Missing file = none."""
+    if path is None or not path.is_file():
+        return []
+    terms = (line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines())
+    return list(dict.fromkeys(t for t in terms if t and not t.startswith("#")))
+
+
 class TranscriptionSettings(BaseModel):
+    engine: Literal["local", "azure-speech"] = Field(
+        "local", description="local = faster-whisper on this computer; azure-speech = Azure AI Speech fast transcription.",
+    )
+    azure_endpoint: str | None = Field(
+        None, description="The Azure AI Speech (or AI Services) resource endpoint, e.g. https://<name>.services.ai.azure.com/.",
+    )
+    terms_file: Path | None = Field(
+        default_factory=lambda: USER_HOME / TERMS_FILE_NAME,
+        description="Technical terms and names the cloud engine should expect, one per line (Azure AI Speech only).",
+    )
     model: str = "large-v3"
     device: Literal["auto", "cpu", "cuda"] = "auto"
     language: str | None = Field(None, description="Language hint, e.g. 'en' or 'vi'. None = detect (mixed allowed).")
@@ -38,7 +62,14 @@ class TranscriptionSettings(BaseModel):
     def cache_key(self) -> dict:
         """What a transcript depends on. Options that are off are left out, so turning on an option a workflow needs
         doesn't redo transcripts made without it."""
-        key = self.model_dump(exclude={"device", "word_timestamps", "verbatim"})
+        if self.engine == "local":
+            # Unchanged from before engines could be chosen, so existing transcripts stay valid.
+            key = self.model_dump(exclude={"engine", "azure_endpoint", "terms_file", "device", "word_timestamps", "verbatim"})
+        else:
+            # Which resource serves it doesn't change the transcript; the terms do, but not where they are kept.
+            key = {"engine": self.engine, "language": self.language, "chunk_minutes": self.chunk_minutes}
+            if terms := read_terms(self.terms_file):
+                key["terms"] = hashlib.sha256("\n".join(terms).encode()).hexdigest()[:16]
         key.update({k: True for k in ("word_timestamps", "verbatim") if getattr(self, k)})
         return key
 
@@ -86,6 +117,12 @@ class Settings(BaseModel):
     evidence: EvidenceSettings = EvidenceSettings()
     llm: LlmSettings = LlmSettings()
     templates_dirs: list[Path] = Field(default_factory=lambda: [USER_TEMPLATES_DIR])
+    correct_transcript: bool = Field(
+        False, description="Have Claude fix clearly misheard words in the transcript before the report reads it.",
+    )
+    resource_use: str | None = Field(
+        None, description="How much of the computer the caller let the run use, in its words (recorded only).",
+    )
     stats_file: Path | None = Field(
         default_factory=lambda: USER_HOME / "stats" / "runs.jsonl",
         description="Where each run appends one JSON line for statistics (see engine/perf.py). None = don't record.",

@@ -45,7 +45,7 @@ def test_long_silences_are_marked():
 
 def test_default_transcription_key_is_unchanged_by_the_new_options():
     ts = TranscriptionSettings(models_dir=None)
-    before = ts.model_dump(exclude={"device", "word_timestamps", "verbatim"})
+    before = ts.model_dump(exclude={"engine", "azure_endpoint", "terms_file", "device", "word_timestamps", "verbatim"})
     assert digest(ts.cache_key()) == digest(before)
     assert ts.model_copy(update={"word_timestamps": True}).cache_key()["word_timestamps"] is True
 

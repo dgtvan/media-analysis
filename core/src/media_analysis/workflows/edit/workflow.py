@@ -19,12 +19,15 @@ from pydantic import BaseModel
 from media_analysis.engine.documents import DocumentStore, VersionInfo
 from media_analysis.engine.errors import MediaAnalysisError
 from media_analysis.engine.events import EventSink, null_sink
+from media_analysis.engine.how_made import FILE_NAME as HOW_MADE_FILE
+from media_analysis.engine.how_made import how_made
 from media_analysis.engine.settings import USER_HOME, Settings
 from media_analysis.engine.workflow import CACHE_DIR_NAME, RunContext, RunOptions, Stage, Workflow, check_folders, check_output
 from media_analysis.media import ffmpeg
 from media_analysis.providers.llm import create_llm
 from media_analysis.understand.describe import DescribeStage
 from media_analysis.understand.ingest import IngestStage
+from media_analysis.understand.languages import describe, language_shares
 from media_analysis.understand.models import Descriptions, Ingest, ShotList, Transcript
 from media_analysis.understand.shots import ShotsStage
 from media_analysis.understand.sound import SoundStage
@@ -213,6 +216,12 @@ class EditWorkflow(Workflow[EditOptions, EditResult]):
             input_dir=str(opts.input_dir) if opts.files is None else None,
         ))
         write_exports(store.load(), u.ingest, info.version, opts.output_dir / "export")
+        limit = opts.max_seconds or profile.max_seconds
+        extras = [("Speech", describe(language_shares(snapshot.transcript)) or "none transcribed"),
+                  ("Profile", f"{profile.name} (`{profile.id}`)"),
+                  ("Length limit", f"{limit} s" if limit else "none")]
+        (opts.output_dir / "export" / HOW_MADE_FILE).write_text(
+            how_made("How this analysis was made", self.timer, self.settings, self.started, extras), encoding="utf-8")
         (opts.output_dir / SNAPSHOT_FILE).write_text(snapshot.model_dump_json(), encoding="utf-8")
         return EditResult(version=info, plan=store.load(), warnings=first.warnings)
 

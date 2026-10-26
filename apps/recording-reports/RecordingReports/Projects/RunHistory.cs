@@ -12,8 +12,15 @@ sealed record RunResult(
     DateTime StartedAt,
     DateTime FinishedAt,
     bool GenericReport = false,
-    TimeSpan? Total = null)
+    TimeSpan? Total = null,
+    Dictionary<string, double>? Languages = null)
 {
+    /// <summary>The languages of the speech, e.g. "Vietnamese + English"; empty when not known.</summary>
+    public string LanguageLabel => RunStatus.DescribeLanguages(Languages);
+
+    /// <summary>Each language's share of the speech, e.g. "Vietnamese 85%, English 15%".</summary>
+    public string LanguageShares => RunStatus.DescribeShares(Languages);
+
     /// <summary>This run alone.</summary>
     public TimeSpan Elapsed => FinishedAt - StartedAt;
 

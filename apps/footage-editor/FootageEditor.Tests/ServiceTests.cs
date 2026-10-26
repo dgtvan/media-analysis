@@ -19,6 +19,18 @@ public sealed class ServiceTests
         Assert.DoesNotContain("--claude-profile", Service.Arguments("ui", new AppSettings()));
     }
 
+    [Fact]
+    public void Azure_transcription_is_passed_to_the_service_without_the_key()
+    {
+        var settings = new AppSettings { Transcriber = AppSettings.AzureTranscriber, AzureEndpoint = "https://r.cognitiveservices.azure.com/", AzureKey = "secret" };
+        Assert.Equal(["-m", "media_analysis", "serve", "--ui", "ui", "--transcriber", "azure-speech", "--azure-endpoint", "https://r.cognitiveservices.azure.com/"],
+            Service.Arguments("ui", settings));
+        Assert.Equal("secret", settings.Copy().AzureKey);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(settings));
+        settings.Transcriber = null;
+        Assert.DoesNotContain("--transcriber", Service.Arguments("ui", settings));
+    }
+
     [Theory]
     [InlineData(new[] { "--data-dir", @"C:\x\data" }, @"C:\x\data")]
     [InlineData(new[] { "--data-dir" }, null)]

@@ -100,6 +100,18 @@ def decode_audio(path: Path, sample_rate: int = 16000, start: float = 0.0, durat
     return np.frombuffer(out, dtype=np.float32).copy()
 
 
+def encode_flac(audio: np.ndarray, sample_rate: int = 16000) -> bytes:
+    """Mono float32 samples as a 16-bit FLAC file, for uploading speech at about half the size of WAV."""
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+    args = [find_binary("ffmpeg"), "-nostdin", "-v", "error", "-f", "s16le", "-ar", str(sample_rate), "-ac", "1",
+            "-i", "-", "-f", "flac", "-"]
+    proc = subprocess.run(args, input=pcm, capture_output=True, creationflags=_NO_WINDOW)
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-5:]
+        raise MediaAnalysisError("ffmpeg failed: " + " | ".join(err))
+    return proc.stdout
+
+
 def iter_frames(
     path: Path,
     fps: float,

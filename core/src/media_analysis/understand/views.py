@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from media_analysis.engine.timecode import format_timecode
+from media_analysis.understand.languages import language_shares, transcript_note
 from media_analysis.understand.models import Descriptions, Ingest, ShotList, Transcript, VisualScan, Word
 
 
@@ -76,8 +77,11 @@ def _duration(seconds: float) -> str:
 
 def transcript_view(ingest: Ingest, transcript: Transcript, rules: PhraseRules = PhraseRules()) -> str:
     """Timecoded phrases per file. Files with a speaker were recorded together, so their speech is merged into one
-    conversation on a shared timeline, each line labelled with its speaker."""
+    conversation on a shared timeline, each line labelled with its speaker. Speech that isn't all English starts
+    with a note on its languages."""
     lines: list[str] = []
+    if note := transcript_note(language_shares(transcript)):
+        lines += [note, ""]
     together = [ft for ft in transcript.files if ingest.by_id(ft.file_id).speaker]
     if together:
         sources = ", ".join(f"{mf.id} ({mf.name}) = {mf.speaker}" for mf in (ingest.by_id(ft.file_id) for ft in together))

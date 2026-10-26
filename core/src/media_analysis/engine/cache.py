@@ -66,3 +66,15 @@ class Cache:
         tmp.write_text(value.model_dump_json(indent=2), encoding="utf-8")
         tmp.replace(p)
         return p
+
+    def load_made_with(self, stage: str, key: str) -> dict[str, Any] | None:
+        """How a cached result was made (see `save_made_with`); None for results cached before this was kept."""
+        p = self.path(stage, key, ".made-with.json")
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def save_made_with(self, stage: str, key: str, made_with: dict[str, Any]) -> None:
+        self.path(stage, key, ".made-with.json").write_text(json.dumps(made_with, indent=2, ensure_ascii=False), encoding="utf-8")

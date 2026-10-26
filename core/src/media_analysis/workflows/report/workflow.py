@@ -11,11 +11,15 @@ from typing import Any
 
 from media_analysis.engine.errors import MediaAnalysisError
 from media_analysis.engine.events import EventSink, null_sink
+from media_analysis.engine.how_made import FILE_NAME as HOW_MADE_FILE
+from media_analysis.engine.how_made import how_made
 from media_analysis.engine.settings import Settings
 from media_analysis.engine.workflow import RunContext, RunOptions, Workflow
 from media_analysis.providers.llm import create_llm
 from media_analysis.understand.condense import CondenseStage
+from media_analysis.understand.correct import CORRECTIONS_FILE, CorrectStage, corrections_markdown
 from media_analysis.understand.ingest import IngestStage
+from media_analysis.understand.languages import describe, language_shares
 from media_analysis.understand.models import Ingest
 from media_analysis.understand.scan import ScanStage
 from media_analysis.understand.transcribe import TranscribeStage
@@ -42,12 +46,14 @@ class ReportResult:
     classification: Classification
     evidence_count: int
     warnings: list[str] = field(default_factory=list)
+    languages: dict[str, float] = field(default_factory=dict)
+    """Share of the speech per language, largest first."""
 
 
 class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
     name = "report"
     stages = [
-        IngestStage, TranscribeStage, ScanStage, CondenseStage, ClassifyStage, PlanStage, ExtractStage, ReadStage, WriteStage,
+        IngestStage, TranscribeStage, CorrectStage, ScanStage, CondenseStage, ClassifyStage, PlanStage, ExtractStage, ReadStage, WriteStage,
         AssembleStage,
     ]
 
@@ -57,6 +63,7 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
         # Kept for the run statistics, which are also written when a later stage fails.
         self._ingest: Ingest | None = None
         self._classification: Classification | None = None
+        self._languages: dict[str, float] = {}
 
     def prepare(self, opts: ReportOptions) -> None:
         self._templates = load_templates(self.settings.templates_dirs)
@@ -74,6 +81,14 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
         ingest = self._ingest = IngestStage(ctx).run(opts.input_dir)
         ctx.timer.audio_seconds = sum(f.duration for f in ingest.files if f.uses_audio)
         transcript = TranscribeStage(ctx).run(ingest)
+        languages = self._languages = language_shares(transcript)
+        corrections_path = opts.output_dir / CORRECTIONS_FILE
+        corrections_path.unlink(missing_ok=True)
+        if self.settings.correct_transcript:
+            corrected = CorrectStage(ctx).run(ingest, transcript)
+            transcript = corrected.transcript
+            if corrected.corrections:
+                corrections_path.write_text(corrections_markdown(ingest, corrected.corrections), encoding="utf-8")
         scan = ScanStage(ctx).run(ingest)
         text = CondenseStage(ctx).run(transcript_view(ingest, transcript)).text
         classification = self._classification = ClassifyStage(ctx).run(
@@ -85,7 +100,20 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
         evidence = ReadStage(ctx).run(ingest, plan, candidates, template)
         draft = WriteStage(ctx).run(ingest, text, evidence, template)
         report_path, warnings = AssembleStage(ctx).run(opts.output_dir, draft, evidence, ingest, template, classification)
-        return ReportResult(report_path, classification, len(evidence.items), warnings)
+        if classification.forced:
+            chosen = "selected by the user"
+        elif classification.fallback:
+            chosen = f"no template fit (closest confidence {classification.confidence:.2f}), so the generic one"
+        else:
+            chosen = f"chosen by Claude (confidence {classification.confidence:.2f})"
+        extras = [
+            ("Speech", describe(languages) or "none transcribed"),
+            ("Template", f"{template.name} (`{template.id}`), {chosen}"),
+            ("Key moments", f"up to {self.settings.evidence.max_requests}; {len(evidence.items)} frame(s) in the report"),
+        ]
+        (opts.output_dir / HOW_MADE_FILE).write_text(
+            how_made("How this report was made", self.timer, self.settings, self.started, extras), encoding="utf-8")
+        return ReportResult(report_path, classification, len(evidence.items), warnings, languages)
 
     def record_fields(self, result: ReportResult | None) -> tuple[dict[str, Any], dict[str, Any]]:
         files = self._ingest.files if self._ingest else []
@@ -104,5 +132,6 @@ class ReportWorkflow(Workflow[ReportOptions, ReportResult]):
                 "id": c.template_id, "generic": c.fallback, "forced": c.forced, "confidence": c.confidence,
             },
             "evidence_count": result.evidence_count if result else None,
+            "languages": self._languages or None,
         }
         return fields, {"max_frames": self.settings.evidence.max_requests}

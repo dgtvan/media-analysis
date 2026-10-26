@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
 
-from media_analysis.engine.cache import Cache, digest
+from pydantic import BaseModel
+
+from media_analysis.engine.cache import Cache, M, digest
 from media_analysis.engine.errors import MediaAnalysisError
 from media_analysis.engine.events import EventSink, Reporter, null_sink
 from media_analysis.engine.perf import StageTimer, TimedLLM, append_run_record, run_record
@@ -36,6 +38,38 @@ class RunOptions:
     """Where the caller logs this run (run statistics only)."""
 
 
+class RecordingCache:
+    """The run's cache as stages use it: next to every result it saves how it was made (what the stage noted,
+    the Claude models and settings), and it tells the timer how every result taken from the cache was made."""
+
+    def __init__(self, cache: Cache, timer: StageTimer, settings: Settings) -> None:
+        self._cache = cache
+        self._timer = timer
+        self._settings = settings
+        self.root = cache.root
+
+    def dir(self, *parts: str) -> Path:
+        return self._cache.dir(*parts)
+
+    def path(self, stage: str, key: str, suffix: str = ".json") -> Path:
+        return self._cache.path(stage, key, suffix)
+
+    def load(self, stage: str, key: str, model: type[M]) -> M | None:
+        value = self._cache.load(stage, key, model)
+        if value is not None:
+            self._timer.reused(stage, self._cache.load_made_with(stage, key))
+        return value
+
+    def save(self, stage: str, key: str, value: BaseModel) -> Path:
+        path = self._cache.save(stage, key, value)
+        made_with = self._timer.made_with(stage)
+        if made_with.get("claude_models"):
+            llm = self._settings.llm
+            made_with.update(claude_backend=llm.backend, claude_effort=llm.effort)
+        self._cache.save_made_with(stage, key, made_with)
+        return path
+
+
 class RunContext:
     """What the stages of one run share: settings, cache, events and the Claude client."""
 
@@ -45,7 +79,7 @@ class RunContext:
         """Only read results from the cache; a stage that would have to do work fails instead."""
         self.timer = workflow.timer
         self.sink: EventSink = workflow.timer
-        self.cache = cache
+        self.cache = RecordingCache(cache, workflow.timer, workflow.settings)
         self._workflow = workflow
         self._force_from = force_from
         self._llm: Any = None
@@ -80,6 +114,10 @@ class Stage:
         """Cache key of a result: everything it depends on, plus the stage version."""
         return digest([*parts, self.version])
 
+    def note(self, **made_with: Any) -> None:
+        """Records what does this stage's work, e.g. note(transcriber="..."); kept with the results it caches."""
+        self.ctx.timer.note(self.name, **made_with)
+
     def need_work(self) -> None:
         """Called before a stage does real work; refuses when the run may only read the cache."""
         if self.ctx.cache_only:
@@ -99,6 +137,7 @@ class Workflow(Generic[O, R]):
     def __init__(self, settings: Settings, sink: EventSink = null_sink) -> None:
         self.settings = settings
         self.timer = StageTimer(sink)
+        self.started = datetime.now(timezone.utc)
 
     @classmethod
     def stage_names(cls) -> list[str]:
@@ -107,7 +146,7 @@ class Workflow(Generic[O, R]):
     def run(self, opts: O) -> R:
         """Runs every stage; always ends with a summary event of how long each stage took, also on failure, and
         appends the run to the stats file."""
-        started = datetime.now(timezone.utc)
+        started = self.started = datetime.now(timezone.utc)
         failed, error, result = True, None, None
         try:
             result = self._run(opts)

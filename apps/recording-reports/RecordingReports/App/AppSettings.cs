@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace RecordingReports.App;
 
@@ -63,11 +66,74 @@ sealed class AppSettings
 
     private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd('\\');
 
-    /// <summary>Transcription model (core's <c>--whisper-model</c>); null = the core's default.</summary>
-    public string? WhisperModel { get; set; }
+    /// <summary>Core's <c>--transcriber</c> value for Azure AI Speech.</summary>
+    public const string AzureTranscriber = "azure-speech";
 
-    /// <summary>Spoken language hint (<c>--language</c>, e.g. "en", "vi"); null = detect, mixed allowed.</summary>
-    public string? Language { get; set; }
+    /// <summary>Environment variable the core reads the Azure key from; never passed on the command line.</summary>
+    public const string AzureKeyVariable = "MEDIA_ANALYSIS_AZURE_KEY";
+
+    /// <summary>Transcription engine (core's <c>--transcriber</c>): null = Whisper on this computer, or <see cref="AzureTranscriber"/>.</summary>
+    public string? Transcriber { get; set; }
+
+    public bool UsesAzure => Transcriber == AzureTranscriber;
+
+    /// <summary>Azure AI Speech resource endpoint (<c>--azure-endpoint</c>), e.g. https://&lt;name&gt;.services.ai.azure.com/.</summary>
+    public string? AzureEndpoint { get; set; }
+
+    /// <summary>The Azure key, encrypted with DPAPI for the current Windows account, base64.</summary>
+    public string? AzureKeyProtected { get; set; }
+
+    /// <summary>The Azure key in plain text; stored only as <see cref="AzureKeyProtected"/>.</summary>
+    [JsonIgnore]
+    public string? AzureKey
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(AzureKeyProtected))
+                return null;
+            try
+            {
+                return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(AzureKeyProtected), null, DataProtectionScope.CurrentUser));
+            }
+            catch (Exception ex) when (ex is CryptographicException or FormatException)
+            {
+                // Encrypted by another Windows account or damaged: as if no key had been entered.
+                return null;
+            }
+        }
+        set => AzureKeyProtected = string.IsNullOrWhiteSpace(value)
+            ? null
+            : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value.Trim()), null, DataProtectionScope.CurrentUser));
+    }
+
+    /// <summary>The technical terms file the core reads from the data folder (core's <c>TERMS_FILE_NAME</c>).</summary>
+    public static string TermsFile(string dataDir) => System.IO.Path.Combine(dataDir, "transcription-terms.txt");
+
+    /// <summary>Creates the terms file with instructions when it doesn't exist yet; returns its path.</summary>
+    public static string EnsureTermsFile(string dataDir)
+    {
+        string path = TermsFile(dataDir);
+        if (!File.Exists(path))
+        {
+            Directory.CreateDirectory(dataDir);
+            File.WriteAllText(path, """
+                # Technical terms and names Azure AI Speech should expect, one per line, e.g.
+                # product names, acronyms and the English terms your meetings use.
+                # Lines starting with # are ignored. Azure uses the list for English speech;
+                # its Vietnamese model ignores it.
+                # Changing the list transcribes projects again the next time they are analysed.
+
+                """);
+        }
+        return path;
+    }
+
+    /// <summary>Environment variables the core needs besides <c>core.json</c>'s: the Azure key when Azure transcribes.</summary>
+    public Dictionary<string, string> CoreEnvironment() =>
+        UsesAzure && AzureKey is { } key ? new() { [AzureKeyVariable] = key } : [];
+
+    /// <summary>Transcription model on this computer (core's <c>--whisper-model</c>); null = the core's default.</summary>
+    public string? WhisperModel { get; set; }
 
     /// <summary>Claude thinking effort (<c>--effort</c>); null = the model's default.</summary>
     public string? Effort { get; set; }
@@ -116,6 +182,9 @@ sealed class AppSettings
     /// <summary>Maximum moments to capture as evidence (<c>--max-frames</c>); null = the core's default.</summary>
     public int? MaxFrames { get; set; }
 
+    /// <summary>Have Claude fix clearly misheard words in the transcript before the report (<c>--correct-transcript</c>).</summary>
+    public bool CorrectTranscript { get; set; } = true;
+
     /// <summary>How much of the computer analyses may use, unless a project is given its own level.</summary>
     public ResourceLevel Resources { get; set; } = ResourceLevels.Default;
 
@@ -123,14 +192,16 @@ sealed class AppSettings
     public List<string> CoreArguments()
     {
         var args = new List<string>();
-        if (!string.IsNullOrEmpty(WhisperModel))
+        if (UsesAzure)
+            args.AddRange(["--transcriber", AzureTranscriber, "--azure-endpoint", AzureEndpoint ?? ""]);
+        else if (!string.IsNullOrEmpty(WhisperModel))
             args.AddRange(["--whisper-model", WhisperModel]);
-        if (!string.IsNullOrEmpty(Language))
-            args.AddRange(["--language", Language]);
         if (!string.IsNullOrEmpty(Effort))
             args.AddRange(["--effort", Effort]);
         // Always explicit, so the core never falls back to a CLAUDE_CONFIG_DIR the app happened to inherit.
         args.AddRange(["--claude-profile", ClaudeProfileInUse()]);
+        if (CorrectTranscript)
+            args.Add("--correct-transcript");
         if (MaxFrames is { } frames)
             args.AddRange(["--max-frames", frames.ToString()]);
         return args;

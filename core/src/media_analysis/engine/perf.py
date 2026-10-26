@@ -28,6 +28,11 @@ class StageRecord:
     claude_calls: int = 0
     claude_seconds: float = 0.0
     usage: Usage = field(default_factory=Usage)
+    claude_models: set[str] = field(default_factory=set)
+    made_with: dict[str, Any] = field(default_factory=dict)
+    """What did this run's work, e.g. {"transcriber": "Azure AI Speech at ..."} (see `StageTimer.note`)."""
+    reused: list[dict[str, Any]] = field(default_factory=list)
+    """How the results this run took from the cache were made, one entry per distinct way."""
     _started: float | None = field(default=None, repr=False)
 
 
@@ -42,6 +47,7 @@ class StageTimer:
         self.claude_seconds = 0.0
         self.usage = Usage()
         self.audio_seconds = 0.0
+        self.claude_models: set[str] = set()
         self._current: str | None = None
 
     def __call__(self, e: Event) -> None:
@@ -64,15 +70,38 @@ class StageTimer:
                     self._current = None
         self._sink(e)
 
-    def add_claude_call(self, seconds: float, usage: Usage | None = None) -> None:
+    def note(self, stage: str, **made_with: Any) -> None:
+        """Records what does a stage's work in this run (kept with its cached results and in the run record)."""
+        self.stages.setdefault(stage, StageRecord(stage)).made_with.update(made_with)
+
+    def made_with(self, stage: str) -> dict[str, Any]:
+        """How a result the stage is about to cache was made."""
+        rec = self.stages.setdefault(stage, StageRecord(stage))
+        out: dict[str, Any] = {"made_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "app_version": __version__}
+        if rec.claude_models:
+            out["claude_models"] = sorted(rec.claude_models)
+        return {**out, **rec.made_with}
+
+    def reused(self, stage: str, made_with: dict[str, Any] | None) -> None:
+        """Records how a result the stage took from the cache was made (empty when that wasn't kept)."""
+        rec = self.stages.setdefault(stage, StageRecord(stage))
+        entry = {k: v for k, v in (made_with or {}).items() if k != "made_at"}
+        if all({k: v for k, v in r.items() if k != "made_at"} != entry for r in rec.reused):
+            rec.reused.append(made_with or {})
+
+    def add_claude_call(self, seconds: float, usage: Usage | None = None, model: str | None = None) -> None:
         """Counts a Claude call towards the run and the stage in progress, and logs it."""
         self.claude_calls += 1
         self.claude_seconds += seconds
         stage = self._current or ""
         rec = self.stages.get(stage) if stage else None
+        if model:
+            self.claude_models.add(model)
         if rec is not None:
             rec.claude_calls += 1
             rec.claude_seconds += seconds
+            if model:
+                rec.claude_models.add(model)
         if usage is not None:
             self.usage += usage
             if rec is not None:
@@ -114,11 +143,14 @@ class StageTimer:
             "claude_calls": self.claude_calls,
             "claude_seconds": round(self.claude_seconds, 1),
             "claude_usage": self.usage.to_dict(),
+            "claude_models": sorted(self.claude_models),
             "audio_seconds": round(self.audio_seconds, 1),
             "transcribe_speed": round(speed, 2) if speed else None,
             "stages": [
                 {"stage": r.stage, "result": r.result, "seconds": round(r.seconds, 1), "message": r.message,
-                 "claude_calls": r.claude_calls, "claude_usage": r.usage.to_dict()}
+                 "claude_calls": r.claude_calls, "claude_usage": r.usage.to_dict(),
+                 "made_with": ({**r.made_with, "claude_models": sorted(r.claude_models)} if r.claude_models else r.made_with) or None,
+                 "reused": r.reused or None}
                 for r in rows
             ],
         }
@@ -134,6 +166,8 @@ class TimedLLM:
         self.model = inner.model
         self.effort = inner.effort
         self.last_usage = None
+        self.last_model: str | None = None
+        """The model that answered the last call (the account default resolved), when the backend reports it."""
 
     def _call(self, fn):
         started = time.monotonic()
@@ -142,7 +176,8 @@ class TimedLLM:
             return fn()
         finally:
             self.last_usage = self._inner.last_usage
-            self._timer.add_claude_call(time.monotonic() - started, self.last_usage)
+            self.last_model = getattr(self._inner, "last_model", None) or self._inner.model
+            self._timer.add_claude_call(time.monotonic() - started, self.last_usage, self.last_model)
 
     def generate_json(self, system, content, schema, on_activity=None):
         return self._call(lambda: self._inner.generate_json(system, content, schema, on_activity))
@@ -194,12 +229,15 @@ def run_record(
         "settings": {
             "backend": llm.backend, "model": llm.model, "effort": llm.effort,
             "claude_profile": str(llm.profile_dir()) if llm.backend == "subscription" else None,
-            "whisper_model": settings.transcription.model, "device": settings.transcription.device,
-            "language": settings.transcription.language, **settings_fields,
+            "transcriber": settings.transcription.engine,
+            "whisper_model": settings.transcription.model if settings.transcription.engine == "local" else None,
+            "device": settings.transcription.device if settings.transcription.engine == "local" else None,
+            "language": settings.transcription.language, "resource_use": settings.resource_use, **settings_fields,
         },
         "total_seconds": data.get("total_seconds"),
         "transcribe_speed": data.get("transcribe_speed"),
-        "claude": {"calls": data.get("claude_calls", 0), "seconds": data.get("claude_seconds", 0.0), **(data.get("claude_usage") or {})},
+        "claude": {"calls": data.get("claude_calls", 0), "seconds": data.get("claude_seconds", 0.0),
+                   "models": data.get("claude_models") or [], **(data.get("claude_usage") or {})},
         "stages": data.get("stages", []),
     }
 

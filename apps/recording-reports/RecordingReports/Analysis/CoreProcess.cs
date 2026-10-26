@@ -77,7 +77,8 @@ sealed class CoreConfig
 }
 
 /// <summary>One line of the core's <c>--json</c> output (see core/src/media_analysis/engine/events.py and cli/sinks.py).</summary>
-sealed record CoreEvent(string Event, string Stage, string Message, double? Completed, double? Total, bool Generic = false)
+sealed record CoreEvent(string Event, string Stage, string Message, double? Completed, double? Total, bool Generic = false,
+    Dictionary<string, double>? Languages = null)
 {
     /// <summary>Parses one JSON line; null for anything that isn't an event object.</summary>
     public static CoreEvent? Parse(string line)
@@ -92,7 +93,12 @@ sealed record CoreEvent(string Event, string Stage, string Message, double? Comp
             double? Number(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
             string kind = Text("event");
             bool generic = root.TryGetProperty("generic", out var g) && g.ValueKind == JsonValueKind.True;
-            return kind.Length == 0 ? null : new CoreEvent(kind, Text("stage"), Text("message"), Number("completed"), Number("total"), generic);
+            Dictionary<string, double>? languages = null;
+            if (root.TryGetProperty("languages", out var l) && l.ValueKind == JsonValueKind.Object)
+                languages = l.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Number)
+                    .ToDictionary(p => p.Name, p => p.Value.GetDouble());
+            return kind.Length == 0 ? null
+                : new CoreEvent(kind, Text("stage"), Text("message"), Number("completed"), Number("total"), generic, languages);
         }
         catch (JsonException)
         {
