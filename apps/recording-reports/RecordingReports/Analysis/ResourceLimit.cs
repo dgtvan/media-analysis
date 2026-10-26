@@ -17,7 +17,7 @@ enum ResourceLevel
 
 static class ResourceLevels
 {
-    public const ResourceLevel Default = ResourceLevel.Balanced;
+    public const ResourceLevel Default = ResourceLevel.Light;
 
     public static readonly ResourceLevel[] All = Enum.GetValues<ResourceLevel>();
 

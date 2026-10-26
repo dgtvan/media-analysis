@@ -38,7 +38,7 @@ public sealed class ResourceLimitTests
     public void Levels_go_from_least_to_most()
     {
         Assert.Equal([ResourceLevel.Light, ResourceLevel.Balanced, ResourceLevel.Fast, ResourceLevel.Full], ResourceLevels.All);
-        Assert.Equal(ResourceLevel.Balanced, ResourceLevels.Default);
+        Assert.Equal(ResourceLevel.Light, ResourceLevels.Default);
         Assert.Equal("Balanced (up to 50% of the CPU, below-normal priority)", ResourceLevel.Balanced.Describe());
         Assert.Equal("Full (no limit, normal priority)", ResourceLevel.Full.Describe());
     }

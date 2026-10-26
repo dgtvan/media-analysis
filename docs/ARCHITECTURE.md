@@ -312,8 +312,8 @@ Namespaces follow the folders (`RecordingReports.Analysis`, ...); the project fi
   `python -m media_analysis report <project> <output> --json` with the options from Config, the Claude profile, the log
   path and the project's name. One analysis runs at a time; the rest wait in a queue.
 - **Resource use.** The core runs in a Windows job object, so its CPU cap and priority also cover the processes it
-  starts (ffmpeg, Claude Code). Config sets the level for all analyses (Light 25% of the CPU at idle priority,
-  Balanced 50% below normal (default), Fast 75% below normal, Full no limit at normal priority); a running or queued
+  starts (ffmpeg, Claude Code). Config sets the level for all analyses (Light 25% of the CPU at idle priority (default),
+  Balanced 50% below normal, Fast 75% below normal, Full no limit at normal priority); a running or queued
   project can get its own level from its right-click menu. Changes apply to a running analysis at once and are
   written to its log; a queued project raised above the Config level moves to the front. A project's own level is
   kept in `pending.json`, so it survives a restart, and is dropped when the analysis ends. Only the CPU is limited.
