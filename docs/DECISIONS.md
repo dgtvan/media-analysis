@@ -6,6 +6,18 @@ and [DEPLOYMENT.md](DEPLOYMENT.md); this file keeps the reasons that the code do
 
 ---
 
+## 2026-10-27 · Meeting Recorder's recording.json drives speakers, offsets and silent files
+
+**Change.** Ingest reads `recording.json` (written by Meeting Recorder since 27 Oct) for each file's speaker, start on
+the shared clock and silence; silent files and the older `audio-app` duplicate aren't transcribed; all times shown to
+Claude and in the report are on the shared clock; a one-sided conversation is stated, and *Me* is described as a
+microphone that can hear a whole room.
+
+**Why.** Reviewing real folders found Meeting Recorder had recorded only the microphone in four calls (since fixed
+there), and the reports didn't say so; a third, duplicate audio track was transcribed; videos started 1-3 s after
+the audio; and a meeting held in a room put everyone under *Me*. This is the first, rule-based part of the planned
+media plan (a description of how to treat each file); folders with hand-written notes still need the Claude-made plan.
+
 ## 2026-10-26 · Footage Editor removed; the repo focuses on Recording Reports
 
 **Change.** Removed the Footage Editor app (`apps/footage-editor`) and everything in the core only it used: the

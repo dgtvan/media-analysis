@@ -45,7 +45,7 @@ class ClassifyStage(Stage):
             content: list = [
                 Text("# Available templates\n" + "\n".join(t.summary_for_classification() for t in templates.values())),
                 Text("# Transcript\n" + transcript),
-                Text("# Visual segments\n" + scan_view(scan)),
+                Text("# Visual segments\n" + scan_view(scan, ingest)),
             ]
             sheet = self._contact_sheet(ingest, scan)
             if sheet:
@@ -90,5 +90,5 @@ class ClassifyStage(Stage):
             out = thumbs_dir / f"{f.fingerprint}-{int(s.rep_time * 1000)}.jpg"
             if not out.exists():
                 ffmpeg.extract_still(Path(f.path), s.rep_time, out, max_side=640)
-            items.append((f"{s.file_id} {format_timecode(s.rep_time)}", out))
+            items.append((f"{s.file_id} {format_timecode(f.clock(s.rep_time))}", out))
         return contact_sheet(items, self.cache.dir("scan") / f"sheet-{digest([str(p) for _, p in items])}.jpg")

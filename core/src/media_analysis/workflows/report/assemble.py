@@ -57,7 +57,7 @@ def assemble_output(
         if item.id in written:
             return written[item.id]
         f = ingest.by_id(item.file_id)
-        base = f"{_safe_stem(f.name)}_{format_timecode(item.time, '-')}"
+        base = f"{_safe_stem(f.name)}_{format_timecode(f.clock(item.time), '-')}"
         name, n = base, 2
         while (frames_dir / f"{name}.jpg").exists():
             name, n = f"{base}_{n}", n + 1
@@ -67,7 +67,7 @@ def assemble_output(
         if item.text:
             text_dir.mkdir(parents=True, exist_ok=True)
             (text_dir / f"{name}.md").write_text(
-                f"# Text in frame — {f.name} at {format_timecode(item.time)}\n\n```text\n{item.text}\n```\n",
+                f"# Text in frame — {f.name} at {format_timecode(f.clock(item.time))}\n\n```text\n{item.text}\n```\n",
                 encoding="utf-8",
             )
             text_rel = f"reference/text/{name}.md"
@@ -82,7 +82,7 @@ def assemble_output(
             return ""
         img, text_rel = materialise(item)
         f = ingest.by_id(item.file_id)
-        line = f"*{caption or item.caption} — {f.name} at {format_timecode(item.time)}*"
+        line = f"*{caption or item.caption} — {f.name} at {format_timecode(f.clock(item.time))}*"
         if text_rel:
             line += f" · [text in frame]({text_rel})"
         return f"![{caption or item.caption}]({img})\n\n{line}"

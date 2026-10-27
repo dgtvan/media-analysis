@@ -3,6 +3,8 @@
 Speech is shown as phrases: consecutive segments of one speaker are joined while the gaps between them stay short and
 the phrase stays under a length limit, so the text carries fewer timestamps and labels, and every line says when it
 starts and ends. Long stretches without speech are marked, since they often mean a screen share, a demo or a break.
+Times are on the shared clock of files recorded together (MediaFile.clock), so a video that started a little after
+its audio lines up with what was said.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from dataclasses import dataclass
 from media_analysis.engine.timecode import format_timecode
 from media_analysis.understand.languages import language_shares, transcript_note
 from media_analysis.understand.models import Ingest, Transcript, VisualScan
+from media_analysis.understand.sessions import one_sided
 
 
 # Phrases Whisper is known to invent over silence or music (from video outros in its training data). A line that is
@@ -87,24 +90,36 @@ def transcript_view(ingest: Ingest, transcript: Transcript, rules: PhraseRules =
         sources = ", ".join(f"{mf.id} ({mf.name}) = {mf.speaker}" for mf in (ingest.by_id(ft.file_id) for ft in together))
         lines.append(f"## Conversation: {sources}")
         lines.append(
-            "These files were recorded at the same time, together with any silent video below, so all times are on "
-            "one shared timeline. \"Me\" is the person who made the recording (microphone); \"Others\" is everyone "
-            "heard through the computer."
+            "These files were recorded at the same time, together with any video below, so all times are on one "
+            "shared timeline. \"Me\" is the recording computer's microphone: the person who made the recording, and "
+            "anyone else in the same room (several people when the meeting was held in a room). \"Others\" is "
+            "everyone heard through the computer: the remote participants."
         )
-        parts = [
-            (seg.start, seg.end, ingest.by_id(ft.file_id).speaker, seg.text.strip())
-            for ft in together for seg in ft.segments if seg.text.strip() and not is_noise(seg.text)
-        ]
+        if note := one_sided(ingest.files):
+            lines.append(note)
+        parts = []
+        for ft in together:
+            mf = ingest.by_id(ft.file_id)
+            parts += [
+                (mf.clock(seg.start), mf.clock(seg.end), mf.speaker, seg.text.strip())
+                for seg in ft.segments if seg.text.strip() and not is_noise(seg.text)
+            ]
         lines += _lines(_phrases(parts, rules), rules) if parts else ["(no speech)"]
         lines.append("")
     for ft in transcript.files:
         mf = ingest.by_id(ft.file_id)
         if mf.speaker:
             continue
-        lines.append(f"## {mf.id}: {mf.name} (duration {format_timecode(mf.duration)})")
-        parts = [(seg.start, seg.end, None, seg.text.strip()) for seg in ft.segments if seg.text.strip() and not is_noise(seg.text)]
+        starts = f", starts at {format_timecode(mf.offset)} on the shared timeline" if mf.offset >= 0.5 else ""
+        lines.append(f"## {mf.id}: {mf.name} (duration {format_timecode(mf.duration)}{starts})")
+        parts = [
+            (mf.clock(seg.start), mf.clock(seg.end), None, seg.text.strip())
+            for seg in ft.segments if seg.text.strip() and not is_noise(seg.text)
+        ]
         if not mf.has_audio:
             lines.append("(no audio)")
+        elif mf.silent:
+            lines.append("(silent: the recorder measured no sound in it)")
         elif mf.duplicate_audio:
             lines.append("(its sound is the conversation above, so it isn't repeated here)")
         elif not parts:
@@ -115,14 +130,16 @@ def transcript_view(ingest: Ingest, transcript: Transcript, rules: PhraseRules =
     return "\n".join(lines)
 
 
-def scan_view(scan: VisualScan) -> str:
-    """The visual segments as a table."""
+def scan_view(scan: VisualScan, ingest: Ingest) -> str:
+    """The visual segments as a table, on the shared clock."""
     if not scan.segments:
         return "(no video)"
     lines = ["file | # | start-end | kind | edge density"]
     for s in scan.segments:
+        f = ingest.by_id(s.file_id)
         lines.append(
-            f"{s.file_id} | {s.index} | {format_timecode(s.start)}-{format_timecode(s.end)} | {s.kind} | {s.edge_density:.3f}"
+            f"{s.file_id} | {s.index} | {format_timecode(f.clock(s.start))}-{format_timecode(f.clock(s.end))} | {s.kind} "
+            f"| {s.edge_density:.3f}"
         )
     return "\n".join(lines)
 

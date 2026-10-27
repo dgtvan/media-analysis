@@ -112,7 +112,10 @@ elapsed time, log) are kept in `%LOCALAPPDATA%\VanDang\RecordingReports\data\his
 
 A folder with Meeting Recorder's layout (`video.mp4`, `audio-mic.wav`, `audio-system.wav`) is one session: the two
 transcripts are merged into one conversation on a shared timeline, labelled *Me* (microphone) and *Others* (computer
-audio), and frames come from the video. If the video has sound too, it is only their mix and isn't transcribed.
+audio), and frames come from the video. If the video has sound too, it is only their mix and isn't transcribed. With
+Meeting Recorder's `recording.json` in the folder, silent files are skipped, files that started later are lined up on
+the shared timeline, and a recording where only one side of the call was captured says so in the report. *Me* is the
+recording computer's microphone, which in a meeting room includes everyone in the room.
 
 ## Installing on Windows
 

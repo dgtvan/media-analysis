@@ -22,10 +22,19 @@ class MediaFile(BaseModel):
     """Who this file's audio is, for files recorded together on one timeline (e.g. "Me", "Others")."""
     duplicate_audio: bool = False
     """The sound is also in files recorded together with this one (a Meeting Recorder video), so it isn't used."""
+    silent: bool = False
+    """The recorder measured no sound in it (Meeting Recorder's recording.json), so it isn't transcribed."""
+    offset: float = 0.0
+    """Where the file starts on the shared clock of files recorded together, in seconds (e.g. a video that started
+    1.7 s after the audio). Views show times on that clock; media tools take times in the file."""
 
     @property
     def uses_audio(self) -> bool:
-        return self.has_audio and not self.duplicate_audio
+        return self.has_audio and not self.duplicate_audio and not self.silent
+
+    def clock(self, t: float) -> float:
+        """A time in this file, on the shared clock."""
+        return t + self.offset
 
 
 class Ingest(BaseModel):

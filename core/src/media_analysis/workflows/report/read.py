@@ -38,7 +38,7 @@ class ReadStage(Stage):
                 req = plan.requests[c.request_index]
                 f = ingest.by_id(c.file_id)
                 content.append(Text(
-                    f"Frame {c.id} — {f.id} ({f.name}) at {format_timecode(c.time)}. "
+                    f"Frame {c.id} — {f.id} ({f.name}) at {format_timecode(f.clock(c.time))}. "
                     f"Requested because: {req.reason} Look for: {req.look_for}"
                 ))
                 content.append(Image(Path(c.path)))

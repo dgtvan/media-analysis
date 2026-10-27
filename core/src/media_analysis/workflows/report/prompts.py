@@ -142,8 +142,11 @@ Rules:
 - Cite moments with the start time of the transcript line they come from, like [00:12:31] (one time, not a
   range); when there is more than one file, prefix the file id: [f2 00:12:31].
   Files recorded together (a "Conversation" section) share one timeline: cite those with a plain [00:12:31].
-  In a conversation, "Me" is the person who made the recording and "Others" everyone else; use names instead when
-  the conversation makes them clear.
+  In a conversation, "Me" is the recording computer's microphone (the person who made the recording, plus anyone in
+  the same room) and "Others" the remote participants; use names instead when the conversation makes them clear, and
+  don't credit everything said as "Me" to one person when several people in a room are talking.
+- If the transcript says only one side of the conversation was recorded, say so in one short line near the top, and
+  don't present the report as the full discussion.
 - Embed evidence frames where they support the text, each on its own line as `![caption](evidence:ID)` using only the
   given ids, each at most once. Quote or summarise important text read from a frame next to it.
 - Output only the report Markdown, with no preamble or closing remarks."""

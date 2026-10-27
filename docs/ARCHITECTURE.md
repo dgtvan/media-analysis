@@ -124,7 +124,7 @@ need video (scan, plan, extract, read) are skipped for audio-only sessions.
 
 | # | Stage | What it does | Result |
 |---|---|---|---|
-| 1 | ingest | Lists the folder's video/audio files in name order, probes them with ffprobe (duration, streams, size), fingerprints each file, labels Meeting Recorder audio (`audio-mic` = Me, `audio-system` = Others) | `Ingest` |
+| 1 | ingest | Lists the folder's video/audio files in name order, probes them with ffprobe (duration, streams, size), fingerprints each file, labels Meeting Recorder audio (`audio-mic` = Me, `audio-system` = Others; from `recording.json` when present, with start offsets and silent files) | `Ingest` |
 | 2 | transcribe | Decodes 16 kHz mono audio with ffmpeg and transcribes it with faster-whisper or Azure AI Speech, in ~10 minute chunks cut at the quietest moment nearby, each chunk cached so an interrupted run resumes mid-file | `Transcript` |
 | 3 | correct | Claude fixes clearly misheard words (English terms and names in Vietnamese speech) using the whole meeting and the terms list; only with `--correct-transcript` | `CorrectedTranscript` |
 | 4 | scan | Splits each video into visual segments (stretches whose content stays the same), with no AI | `VisualScan` |
@@ -225,7 +225,16 @@ ids with a warning, and copies only referenced frames into `reference/`.
 **Meeting Recorder folders.** A folder with `video.mp4`, `audio-mic.*` and `audio-system.*` is one session recorded on
 one timeline. The two transcripts are merged into one conversation labelled *Me* and *Others* before they go to
 Claude, and frames come from the video. When the video has sound too, it is only the mix of the two audio files, so it
-isn't transcribed: that would take as long again and give Claude the conversation twice, without speakers.
+isn't transcribed: that would take as long again and give Claude the conversation twice, without speakers. Folders
+from 26-27 Oct 2026 also have `audio-app.*`, part of `audio-system`, which is likewise not transcribed.
+
+When the folder has Meeting Recorder's `recording.json`, ingest takes from it each file's speaker (`me`/`others`), its
+start on the shared clock (`start_seconds`, e.g. a video that started 1.7 s after the audio) and whether it is
+silent. Silent files aren't transcribed. A silent side of the conversation (the other participants weren't captured)
+is stated in the transcript, and the report says only one side was recorded. Every time shown to Claude (transcript,
+visual segments, frames) and in the report is on the shared clock; `MediaFile.clock` converts a file time to it and
+the plan stage converts Claude's times back to file times for ffmpeg. *Me* is described to Claude as the recording
+computer's microphone, which in a meeting held in a room picks up everyone in the room.
 
 ### 3.3 Claude access
 

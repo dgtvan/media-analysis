@@ -15,7 +15,8 @@ from media_analysis.workflows.report.templates.registry import Template
 class WriteStage(Stage):
     name = "report"
     # 2: reads the phrase view of the transcript (understand/views.py). 3: cites one time per moment.
-    version = 3
+    # 4: room microphones and one-sided recordings.
+    version = 4
 
     def run(self, ingest: Ingest, transcript: str, evidence: Evidence, template: Template) -> ReportDraft:
         rep = self.rep
@@ -36,7 +37,7 @@ class WriteStage(Stage):
         )
         if evidence.items:
             ev_text = "\n\n".join(
-                f"## {e.id} — {e.file_id} at {format_timecode(e.time)}\nCaption: {e.caption}\n"
+                f"## {e.id} — {e.file_id} at {format_timecode(ingest.by_id(e.file_id).clock(e.time))}\nCaption: {e.caption}\n"
                 f"Description: {e.description}\nText in frame:\n{e.text or '(none)'}"
                 for e in evidence.items
             )

@@ -13,8 +13,8 @@ from media_analysis.workflows.report.templates.registry import Template
 
 class PlanStage(Stage):
     name = "plan"
-    # 2: reads the phrase view of the transcript (understand/views.py).
-    version = 2
+    # 2: reads the phrase view of the transcript (understand/views.py). 3: times on the shared clock.
+    version = 3
 
     def run(self, ingest: Ingest, transcript: str, scan: VisualScan, template: Template) -> FramePlan:
         rep = self.rep
@@ -36,12 +36,15 @@ class PlanStage(Stage):
             f"Template: {template.name}\nSections: {', '.join(template.sections)}\n"
             "Visual evidence that matters:\n" + "\n".join(f"- {e}" for e in template.evidence)
         )
-        video_list = "\n".join(f"- {f.id}: {f.name}, duration {f.duration:.0f}s" for f in videos.values())
+        video_list = "\n".join(
+            f"- {f.id}: {f.name}, duration {f.duration:.0f}s" + (f", starts at {f.offset:.1f}s on the shared timeline" if f.offset else "")
+            for f in videos.values()
+        )
         content = [
             Text("# Report template\n" + template_text),
             Text("# Files with video\n" + video_list),
             Text("# Transcript\n" + transcript),
-            Text("# Visual segments\n" + scan_view(scan)),
+            Text("# Visual segments\n" + scan_view(scan, ingest)),
             Text(f"Return at most {ev.max_requests} requests."),
         ]
         data = self.ctx.llm.generate_json(prompts.PLAN_SYSTEM, content, prompts.plan_schema(ev.max_requests), rep.activity)
@@ -50,8 +53,9 @@ class PlanStage(Stage):
             f = videos.get(r.get("file_id"))
             if f is None:
                 continue
-            start = max(0.0, min(float(r["start"]), f.duration))
-            end = max(start, min(float(r["end"]), f.duration))
+            # Claude reads times on the shared clock; the frames are taken at times in the file.
+            start = max(0.0, min(float(r["start"]) - f.offset, f.duration))
+            end = max(start, min(float(r["end"]) - f.offset, f.duration))
             if end - start < 2:
                 start, end = max(0.0, start - 1), min(f.duration, end + 1)
             end = min(end, start + 60)
