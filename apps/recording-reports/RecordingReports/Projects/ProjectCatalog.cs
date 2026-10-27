@@ -50,7 +50,10 @@ static class ProjectCatalog
         ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr",
     };
 
-    /// <summary>All projects, newest first. Missing or unreadable folders give an empty list.</summary>
+    /// <summary>
+    /// All projects, by folder name descending (recording folders start with their start time, so newest first).
+    /// Missing or unreadable folders give an empty list.
+    /// </summary>
     public static List<Project> Scan(string? projectsRoot, string? outputRoot)
     {
         if (string.IsNullOrEmpty(projectsRoot) || !Directory.Exists(projectsRoot))
@@ -63,7 +66,7 @@ static class ProjectCatalog
                 // The output folder may sit inside the projects folder; it is not a project.
                 .Where(d => outputFull == null || !string.Equals(Normalize(d.FullName), outputFull, StringComparison.OrdinalIgnoreCase))
                 .Select(d => Read(d, outputRoot))
-                .OrderByDescending(p => p.LastModifiedUtc)
+                .OrderByDescending(p => p.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

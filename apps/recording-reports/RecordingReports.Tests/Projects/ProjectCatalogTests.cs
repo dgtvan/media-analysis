@@ -70,17 +70,17 @@ public sealed class ProjectCatalogTests : IDisposable
     }
 
     [Fact]
-    public void Newest_first_and_output_folder_inside_projects_is_skipped()
+    public void Sorted_by_name_descending_and_output_folder_inside_projects_is_skipped()
     {
         var t = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
-        AddProject("older", t, "a.mp4");
-        AddProject("newer", t.AddDays(1), "a.mp4");
+        AddProject("2026-10-02_09-00-00-Later", t, "a.mp4");
+        AddProject("2026-10-01_09-00-00-Earlier", t.AddDays(1), "a.mp4");
         AddProject(".hidden", t.AddDays(2), "a.mp4");
         string innerOutput = AddProject("reports", t.AddDays(3));
 
         var names = ProjectCatalog.Scan(_projects, innerOutput).Select(p => p.Name).ToList();
 
-        Assert.Equal(["newer", "older"], names);
+        Assert.Equal(["2026-10-02_09-00-00-Later", "2026-10-01_09-00-00-Earlier"], names);
     }
 
     [Fact]
