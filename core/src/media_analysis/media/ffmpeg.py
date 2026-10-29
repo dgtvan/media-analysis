@@ -157,11 +157,21 @@ def iter_frames(
 def extract_still(path: Path, time: float, out: Path, max_side: int | None = None) -> Path:
     """Write one full-quality JPEG at `time` (optionally capped to `max_side` pixels)."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    args = [find_binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-ss", f"{time:.3f}", "-i", str(path), "-frames:v", "1"]
+    seek = ["-ss", f"{time:.3f}"]
+    tail = ["-frames:v", "1"]
     if max_side:
-        args += ["-vf", f"scale='min({max_side},iw)':'min({max_side},ih)':force_original_aspect_ratio=decrease"]
-    args += ["-q:v", "2", str(out)]
-    _run(args)
+        tail += ["-vf", f"scale='min({max_side},iw)':'min({max_side},ih)':force_original_aspect_ratio=decrease"]
+    tail += ["-q:v", "2", "-update", "1", str(out)]
+    base = [find_binary("ffmpeg"), "-nostdin", "-v", "error", "-y"]
+    out.unlink(missing_ok=True)
+    try:
+        _run(base + seek + ["-i", str(path)] + tail)
+    except MediaAnalysisError:
+        pass
+    if not out.exists():
+        # Seeking before -i gives no frames in some recordings (e.g. a short screen share with a single keyframe);
+        # decoding from the start always reaches the frame.
+        _run(base + ["-i", str(path)] + seek + tail)
     if not out.exists():
         raise MediaAnalysisError(f"Could not extract a frame at {time:.1f}s from {path.name}")
     return out

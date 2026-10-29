@@ -61,3 +61,13 @@ def test_dhash_and_hamming():
     a = slide(4)
     assert hamming(dhash(a), dhash(a.copy())) == 0
     assert hamming(dhash(a), dhash(camera(0))) > 4
+
+
+def test_a_video_without_frames_gives_no_segments_and_cleans_up(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    monkeypatch.setattr(segmentation.ffmpeg, "iter_frames", lambda *a, **k: iter(()))
+    monkeypatch.setattr(segmentation.tempfile, "tempdir", str(tmp_path))
+
+    assert segmentation.scan_video(Path("empty.mp4"), 10.0, 2.0, W, H) == []
+    assert list(tmp_path.iterdir()) == []

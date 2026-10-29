@@ -22,7 +22,8 @@ sealed record Project(
     ProjectState State,
     DateTime CreatedUtc = default,
     DateTime NewestMediaUtc = default,
-    IReadOnlyList<MediaFile>? MediaFiles = null)
+    IReadOnlyList<MediaFile>? MediaFiles = null,
+    bool Recording = false)
 {
     public string ReportPath => System.IO.Path.Combine(OutputPath, ProjectCatalog.ReportFileName);
 
@@ -81,6 +82,7 @@ static class ProjectCatalog
         DateTime lastModified = folder.LastWriteTimeUtc;
         DateTime newestMedia = DateTime.MinValue;
         var media = new List<MediaFile>();
+        bool recording = false;
         try
         {
             foreach (var file in folder.GetFiles())
@@ -89,6 +91,8 @@ static class ProjectCatalog
                 DateTime changed = file.LastWriteTimeUtc > file.CreationTimeUtc ? file.LastWriteTimeUtc : file.CreationTimeUtc;
                 if (changed > lastModified)
                     lastModified = changed;
+                if (IsRecorderWorkFile(file.Name))
+                    recording = true;
                 bool video = VideoExtensions.Contains(file.Extension);
                 if (video || AudioExtensions.Contains(file.Extension))
                 {
@@ -110,8 +114,14 @@ static class ProjectCatalog
             : reportWritten > newestMedia ? ProjectState.Analysed
             : ProjectState.NotAnalysed;
         return new Project(folder.Name, folder.FullName, lastModified, media.Count, outputPath, reportWritten, state,
-            folder.CreationTimeUtc, newestMedia, media);
+            folder.CreationTimeUtc, newestMedia, media, recording);
     }
+
+    // Meeting Recorder names its files *.tmp while recording or saving and keeps *.journal.jsonl until it has finished
+    // the folder. Their write times can lag while they are open, so their presence is what counts.
+    private static bool IsRecorderWorkFile(string name) =>
+        name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith(".journal.jsonl", StringComparison.OrdinalIgnoreCase);
 
     private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
 }

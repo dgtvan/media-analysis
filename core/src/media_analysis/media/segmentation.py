@@ -75,30 +75,33 @@ def scan_video(
         hists: list[np.ndarray] = []
         prev_blur: np.ndarray | None = None
         n = 0
-        for _, frame in ffmpeg.iter_frames(path, fps, width, height, gray=True):
-            if n >= capacity:
-                break
-            frames[n] = frame
-            b = blur(frame)
-            if prev_blur is None:
-                motion.append(0.0)
-                block_changes.append(np.zeros((bh, bw), dtype=bool))
-            else:
-                changed = changed_pixels(b, prev_blur, p.pixel_threshold)
-                motion.append(float(changed.mean()))
-                cropped = changed[: bh * p.block, : bw * p.block]
-                block_changes.append(cropped.reshape(bh, p.block, bw, p.block).any(axis=(1, 3)))
-            hist = cv2.calcHist([frame], [0], None, [32], [0, 256])
-            hists.append(cv2.normalize(hist, hist).flatten())
-            prev_blur = b
-            n += 1
-            if on_progress and n % 30 == 0:
-                on_progress(min(n / fps, duration), duration)
-        if n == 0:
-            return []
-        frames.flush()
-        raw = segment_frames(frames[:n], np.array(motion), np.array(block_changes), hists, p)
-        del frames
+        # The open memmap would stop the temporary folder from being deleted on Windows, so close it on every way out.
+        try:
+            for _, frame in ffmpeg.iter_frames(path, fps, width, height, gray=True):
+                if n >= capacity:
+                    break
+                frames[n] = frame
+                b = blur(frame)
+                if prev_blur is None:
+                    motion.append(0.0)
+                    block_changes.append(np.zeros((bh, bw), dtype=bool))
+                else:
+                    changed = changed_pixels(b, prev_blur, p.pixel_threshold)
+                    motion.append(float(changed.mean()))
+                    cropped = changed[: bh * p.block, : bw * p.block]
+                    block_changes.append(cropped.reshape(bh, p.block, bw, p.block).any(axis=(1, 3)))
+                hist = cv2.calcHist([frame], [0], None, [32], [0, 256])
+                hists.append(cv2.normalize(hist, hist).flatten())
+                prev_blur = b
+                n += 1
+                if on_progress and n % 30 == 0:
+                    on_progress(min(n / fps, duration), duration)
+            if n == 0:
+                return []
+            frames.flush()
+            raw = segment_frames(frames[:n], np.array(motion), np.array(block_changes), hists, p)
+        finally:
+            del frames
     to_time = lambda i: min(i / fps, duration)  # noqa: E731
     return [
         (to_time(s.start_index), to_time(s.end_index + 1), s.kind, s.edge_density, to_time(s.rep_index))

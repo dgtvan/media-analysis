@@ -37,6 +37,21 @@ public sealed class ProjectCatalogTests : IDisposable
     }
 
     [Fact]
+    public void A_folder_with_recorder_work_files_is_still_recording()
+    {
+        var t = new DateTime(2026, 10, 29, 2, 0, 0, DateTimeKind.Utc);
+        AddProject("recording", t, "share-3.mp4", "video.mp4.tmp", "audio-mic.wav.tmp");
+        AddProject("saving", t, "video.mp4", "video.mp4.journal.jsonl");
+        AddProject("finished", t, "video.mp4", "README.md");
+
+        var projects = ProjectCatalog.Scan(_projects, _output).ToDictionary(p => p.Name);
+
+        Assert.True(projects["recording"].Recording);
+        Assert.True(projects["saving"].Recording);
+        Assert.False(projects["finished"].Recording);
+    }
+
+    [Fact]
     public void States_follow_media_files_and_report_time()
     {
         var t = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);

@@ -19,6 +19,16 @@ public sealed class AutoAnalysisTests
     }
 
     [Fact]
+    public void A_project_still_being_recorded_does_not_start_however_long_its_media_files_are_unchanged()
+    {
+        var project = NewProject(Since.AddMinutes(10), Since.AddMinutes(11)) with { Recording = true };
+
+        Assert.True(AutoAnalysis.IsSettling(project, On, null, Since.AddHours(1)));
+        Assert.False(AutoAnalysis.ShouldStart(project, On, null, Since.AddHours(1)));
+        Assert.True(AutoAnalysis.ShouldStart(project with { Recording = false }, On, null, Since.AddHours(1)));
+    }
+
+    [Fact]
     public void A_settling_new_project_is_not_waiting_for_the_user()
     {
         var project = NewProject(Since.AddMinutes(10), Since.AddMinutes(11));

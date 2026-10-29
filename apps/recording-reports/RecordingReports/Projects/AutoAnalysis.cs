@@ -3,7 +3,7 @@ namespace RecordingReports.Projects;
 /// <summary>
 /// Which projects to analyse without being asked: projects created after the option was turned on, never analysed
 /// or attempted before, whose media files have stopped changing for <see cref="SettleTime"/> (so a recording that is
-/// still being copied in isn't analysed half-way). A failed or stopped attempt is not retried automatically.
+/// still being copied in isn't analysed half-way), and that Meeting Recorder has finished. A failed or stopped attempt is not retried automatically.
 /// </summary>
 static class AutoAnalysis
 {
@@ -18,9 +18,9 @@ static class AutoAnalysis
         && project.ReportWrittenUtc == null
         && lastResult == null;
 
-    /// <summary>A candidate whose files are still changing.</summary>
+    /// <summary>A candidate whose files are still changing or still being recorded.</summary>
     public static bool IsSettling(Project project, AppSettings settings, RunResult? lastResult, DateTime nowUtc) =>
-        IsCandidate(project, settings, lastResult) && nowUtc - project.NewestMediaUtc < SettleTime;
+        IsCandidate(project, settings, lastResult) && !IsSettled(project, nowUtc);
 
     /// <summary>
     /// Not analysed and waiting for the user: not ignored, and not a new project that starts by itself once its files
@@ -31,5 +31,8 @@ static class AutoAnalysis
         && !IsSettling(project, settings, lastResult, nowUtc);
 
     public static bool ShouldStart(Project project, AppSettings settings, RunResult? lastResult, DateTime nowUtc) =>
-        IsCandidate(project, settings, lastResult) && nowUtc - project.NewestMediaUtc >= SettleTime;
+        IsCandidate(project, settings, lastResult) && IsSettled(project, nowUtc);
+
+    private static bool IsSettled(Project project, DateTime nowUtc) =>
+        !project.Recording && nowUtc - project.NewestMediaUtc >= SettleTime;
 }
