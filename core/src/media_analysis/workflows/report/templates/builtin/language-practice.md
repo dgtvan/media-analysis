@@ -9,7 +9,6 @@ signals:
 evidence:
   - lesson material, vocabulary lists or exercises shown on screen
 sections:
-  - Summary
   - Participants and topics
   - Learner assessment
   - Grammar mistakes and corrections

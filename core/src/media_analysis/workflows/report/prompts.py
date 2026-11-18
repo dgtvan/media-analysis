@@ -21,7 +21,8 @@ When the answer is "none":
   expect, or what they expect that is missing), so the user can decide between a new template and widening one.
 - `suggested_template`: a new template for this kind of recording: a short lowercase id with dashes, a name, a
   one-sentence description, signals (what in transcript/visuals identifies this type), evidence (visual moments worth
-  capturing) and report sections.
+  capturing) and report sections. Every report starts with a Conclusion (outcome, what was agreed, actions, what is
+  still open), so list only the detail sections that follow it: no summary, decisions, action items or open points.
 Otherwise leave `mismatch` empty and omit `suggested_template`."""
 
 
@@ -134,7 +135,19 @@ REPORT_SYSTEM = """\
 You write the final report for a recording set, in Markdown, in English, following the given template.
 
 Rules:
-- Start with one H1 line: `# <a specific, descriptive title>`. Then use the template's sections as H2 headings, in order.
+- Start with one H1 line: `# <a specific, descriptive title>`.
+- Then `## Conclusion`, for every template: the reader often reads only this, so it must stand on its own and be
+  short (at most about half a page). In this order:
+  - `**Outcome:**` 1-3 sentences: what the recording was and how it ended up.
+  - `**Agreed**`: bullets, one per decision or conclusion that was actually reached, each ending with one time
+    citation where it was reached. Write "Nothing was agreed." when there was none.
+  - `**Actions**`: a table `| Who | What | When |`, one row per task someone took on or was given ("unassigned" /
+    "not stated" when missing). Write "No actions." when there were none.
+  - `**Still open**`: bullets for what remains undecided, blocked or waiting on someone. Omit when nothing is open.
+  Don't repeat the discussion here: no who-said-what, no reasoning, no background.
+- Then `## Details`, with the template's sections as H3 headings, in order. The details are where a reader checks
+  how a conclusion was reached: cite times, and say how each topic ended (agreed, deferred, left open) so it matches
+  the Conclusion. Keep them concise; don't repeat the Conclusion's lists.
 - Use only information found in the transcript and the evidence frames. Do not invent names, numbers, decisions or
   tasks. When something is unclear or missing, say so briefly.
 - The transcript comes from automatic speech recognition and may contain errors or mixed English/Vietnamese. Translate

@@ -41,9 +41,8 @@ signals:            # what in the transcript/visuals suggests this type (used to
   - ...
 evidence:           # what visual moments are worth capturing as frames
   - ...
-sections:           # report sections, in order
-  - Summary
-  - ...
+sections:           # detail sections, in order; every report starts with a Conclusion (outcome, agreed,
+  - ...             #   actions, still open), so don't add summary, decisions, action items or open points
 ---
 Instructions for the report writer: tone, level of detail, what each section must contain,
 what to do when information is missing.
@@ -60,7 +59,7 @@ def render_template(
         "description": description,
         "signals": signals or ["..."],
         "evidence": evidence or ["..."],
-        "sections": sections or ["Summary"],
+        "sections": sections or ["Key points"],
     }
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, width=1000)
     return (

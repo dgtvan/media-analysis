@@ -15,8 +15,8 @@ from media_analysis.workflows.report.templates.registry import Template
 class WriteStage(Stage):
     name = "report"
     # 2: reads the phrase view of the transcript (understand/views.py). 3: cites one time per moment.
-    # 4: room microphones and one-sided recordings.
-    version = 4
+    # 4: room microphones and one-sided recordings. 5: Conclusion first, the template's sections under Details.
+    version = 5
 
     def run(self, ingest: Ingest, transcript: str, evidence: Evidence, template: Template) -> ReportDraft:
         rep = self.rep
@@ -28,7 +28,7 @@ class WriteStage(Stage):
         rep.started(f"writing the {template.name.lower()} report")
         template_text = (
             f"Template: {template.name} — {template.description}\n"
-            "Sections (H2, in this order):\n" + "\n".join(f"- {s}" for s in template.sections)
+            "Detail sections (H3 under ## Details, in this order):\n" + "\n".join(f"- {s}" for s in template.sections)
             + f"\n\nInstructions:\n{template.instructions}"
         )
         files_text = "\n".join(

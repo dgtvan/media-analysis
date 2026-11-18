@@ -220,7 +220,8 @@ uv run media-analysis templates new sales-call      # creates %LOCALAPPDATA%\Van
 ```
 
 A template is a Markdown file with YAML front matter (`id`, `name`, `description`, `signals`, `evidence`, `sections`)
-followed by instructions for the report writer. User templates override built-ins with the same id; `--templates-dir`
+followed by instructions for the report writer. Every report starts with a Conclusion (outcome, what was agreed,
+actions with who and when, what is still open); a template's `sections` are the details that follow it. User templates override built-ins with the same id; `--templates-dir`
 adds more folders.
 
 When no template fits, the report uses the built-in `generic` template and ends with a **Template fit** section: why

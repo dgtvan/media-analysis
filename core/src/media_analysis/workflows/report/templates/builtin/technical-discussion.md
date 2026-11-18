@@ -11,21 +11,17 @@ evidence:
   - code, configuration, logs, error messages, terminal output
   - dashboards, metrics, tickets shown on screen
 sections:
-  - Summary
   - Context and problem
   - Technical details
   - Options and trade-offs
-  - Decisions
-  - Action items
-  - Open questions
   - Glossary
 ---
-Write for an engineer who needs to understand the system and the reasoning, not just the outcome.
+The Conclusion gives the outcome; the details are for an engineer who needs to understand the system and the
+reasoning behind it.
 
 - Be precise: keep exact names of services, functions, tables, endpoints, error codes and numbers as stated or shown.
 - Technical details: explain how the parts fit together; embed diagrams and code frames where they are discussed, and
   quote the important text from those frames.
-- Options and trade-offs: each option with its pros/cons as argued in the discussion.
-- Decisions: only what was agreed; include the reason given.
-- Action items: table Task | Assignee | Due | Source (timecode).
+- Options and trade-offs: each option with its pros/cons as argued in the discussion, and the reason for the one
+  chosen.
 - Glossary: terms or acronyms a newcomer would not know, defined from context. Omit if none.

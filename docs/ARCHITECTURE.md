@@ -314,6 +314,9 @@ not part of the deliverable.
 
 A template is one Markdown file: YAML front matter (`id`, `name`, `description`, `signals` that help classification,
 `evidence` that guides the frame plan, `sections` of the report) followed by instructions for the report writer.
+Every report, whatever its template, starts with `## Conclusion` (outcome, what was agreed, an Actions table
+Who | What | When, what is still open; rules in `REPORT_SYSTEM`); the template's `sections` follow as H3 under
+`## Details`, which is where a reader checks how a conclusion was reached.
 User templates live in `<data folder>/templates` and replace built-in ones with the same id. `templates new <id>`
 creates one from a skeleton.
 

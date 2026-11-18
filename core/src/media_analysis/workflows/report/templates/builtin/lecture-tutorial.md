@@ -10,7 +10,6 @@ evidence:
   - slides with key points, definitions, formulas or diagrams
   - demonstration steps shown on screen (commands, settings, results)
 sections:
-  - Summary
   - Learning objectives
   - Key concepts
   - Step-by-step walkthrough

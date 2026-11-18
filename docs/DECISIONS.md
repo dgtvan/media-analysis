@@ -6,6 +6,20 @@ and [DEPLOYMENT.md](DEPLOYMENT.md); this file keeps the reasons that the code do
 
 ---
 
+## 2026-11-18 · Every report starts with a Conclusion; the template's sections become the Details
+
+**Change.** The report writer now puts `## Conclusion` first in every report, whatever the template: the outcome in
+1-3 sentences, what was agreed (one time citation each), an Actions table (Who | What | When) and what is still
+open. The template's sections follow as H3 under `## Details`. The built-in templates dropped the sections the
+Conclusion now covers (Summary, Participants and Questions in Meeting, Decisions, Action items, Open issues, Plans,
+Follow-ups); the classifier's suggested templates and `templates new` follow the same rule. Existing reports were
+not regenerated.
+
+**Why.** Reports ran to 1,300-4,300 words, and the decisions and actions, the part the user reads, came about
+two-thirds of the way down, after the summary, participants and a topic-by-topic account, split over three sections.
+The details are kept, not dropped, because they are where to check how a conclusion was reached when someone asks.
+The standard sits in the report prompt rather than in each template so user templates get it too.
+
 ## 2026-10-27 · Meeting Recorder's recording.json drives speakers, offsets and silent files
 
 **Change.** Ingest reads `recording.json` (written by Meeting Recorder since 27 Oct) for each file's speaker, start on
